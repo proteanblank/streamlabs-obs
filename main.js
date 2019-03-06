@@ -290,7 +290,7 @@ function startApp() {
     // devtoolsInstaller.default(devtoolsInstaller.VUEJS_DEVTOOLS);
 
     // setTimeout(() => {
-      //openDevTools();
+      openDevTools();
     // }, 10 * 1000);
   }
 }
