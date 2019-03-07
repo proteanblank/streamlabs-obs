@@ -1,7 +1,7 @@
-import overlay, { OverlayId } from '@streamlabs/game-overlay';
 import electron from 'electron';
 import { Subject, Subscription } from 'rxjs';
-import { delay, map, take } from 'rxjs/operators';
+import overlay, { OverlayId } from '@streamlabs/game-overlay';
+import { take } from 'rxjs/operators';
 import { Inject } from 'util/injector';
 import { InitAfter } from 'util/service-observer';
 import { Service } from '../service';
@@ -9,9 +9,9 @@ import { UserService } from 'services/user';
 import { CustomizationService } from 'services/customization';
 import { getPlatformService } from '../platforms';
 import { WindowsService } from '../windows';
-import { tap } from 'rxjs/internal/operators/tap';
 
 const { BrowserWindow, BrowserView } = electron.remote;
+const OFFSCREEN_OFFSET = 0; // 5000;
 
 @InitAfter('UserService')
 export class GameOverlayService extends Service {
@@ -25,6 +25,7 @@ export class GameOverlayService extends Service {
   windows: Dictionary<Electron.BrowserWindow> = {};
   mainWindow: Electron.BrowserWindow;
   onWindowsReady: Subject<Electron.BrowserWindow> = new Subject<Electron.BrowserWindow>();
+  isShowing = false;
 
   init() {
     console.log('initializing overlays');
@@ -34,20 +35,41 @@ export class GameOverlayService extends Service {
       complete: () => {
         Object.values(this.windows).forEach(win => {
           win.showInactive();
-          overlay.addHWND(win.getNativeWindowHandle());
-        });
-        // setTimeout(() => overlay.show(), 10000);
+          // const overlayId: any = overlay.addHWND(win.getNativeWindowHandle());
+          const overlayId = overlay.add('https://google.com');
+          const [x, y] = win.getPosition();
+          console.log('position', win.getPosition());
+          overlay.setPosition(overlayId, x - OFFSCREEN_OFFSET, y, 300, 300);
+          overlay.setTransparency(255);
 
-        // overlay.show();
+          // @ts-ignore: waiting for updated types
+          if (overlayId === '-1') {
+            throw new Error('Error creating overlay');
+          }
+        });
       },
     });
 
     if (this.userService.isLoggedIn()) {
       this.createOverlay();
     }
+
+    this.userLoginSubscription = this.userService.userLogin.subscribe(() => {
+      this.createOverlay();
+    });
+
+    this.userLogoutSubscription = this.userService.userLogout.subscribe(() => {
+      this.destroyOverlay();
+    });
+
+    // TODO: better way to track shutdown
+    electron.ipcRenderer.once('shutdownComplete', () => {
+      overlay.stop();
+    });
   }
 
   async createOverlay() {
+    console.log('creating overlay');
     overlay.start();
 
     const commonWindowOptions = {
@@ -69,21 +91,16 @@ export class GameOverlayService extends Service {
       },
     };
 
-    this.mainWindow = new BrowserWindow({
-      ...commonWindowOptions,
-      width: 300,
-      height: 600,
-    });
     this.windows.recentEvents = new BrowserWindow({
       ...commonWindowOptions,
-      x: 20,
+      x: 20 + OFFSCREEN_OFFSET,
       y: 20,
       parent: this.windows.mainWindow,
     });
 
     this.windows.chat = new BrowserWindow({
       ...commonWindowOptions,
-      x: 20,
+      x: 20 + OFFSCREEN_OFFSET,
       y: 320,
       parent: this.windows.mainWindow,
     });
@@ -117,8 +134,34 @@ export class GameOverlayService extends Service {
     this.windows.chat.addBrowserView(chatBrowserView);
   }
 
+  focusOverlayWindow() {
+    this.windows.recentEvents.focus();
+    this.windows.chat.focus();
+  }
+
+  blurOverlayWindow() {
+    this.windows.recentEvents.blur();
+    this.windows.chat.blur();
+  }
+
+  showOverlay() {
+    overlay.show();
+  }
+
+  hideOverlay() {
+    overlay.hide();
+  }
+
+  toggleOverlay() {
+    if (this.isShowing) {
+      this.isShowing = false;
+      this.hideOverlay();
+    } else {
+      this.isShowing = true;
+      this.showOverlay();
+    }
+  }
+
   // FIXME: this should also be invoked on destroy but we dont seem to have an opposite to mounted, init, etc
   destroyOverlay() {}
-
-  reloadOverlay() {}
 }
