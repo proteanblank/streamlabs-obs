@@ -227,8 +227,7 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
   }
 
   toggleOverlay() {
-    // Until backend fixes what this returns, we need to workaround and replace weird terminator
-    if (overlay.getStatus().replace('\u0000', '') !== OverlayThreadStatus.Running.trim()) {
+    if (overlay.getStatus() !== OverlayThreadStatus.Running) {
       return;
     }
 
