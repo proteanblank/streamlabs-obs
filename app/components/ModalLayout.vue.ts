@@ -54,6 +54,9 @@ export default class ModalLayout extends Vue {
   @Prop({ default: false })
   customControls: boolean;
 
+  @Prop({ default: true })
+  hasTitleBar: boolean;
+
   created() {
     const contentStyle = {
       padding: '16px',

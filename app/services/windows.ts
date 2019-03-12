@@ -71,6 +71,7 @@ import ChatbotBettingProfileWindow from 'components/page-components/Chatbot/wind
 import ChatbotBettingPreferencesWindow from 'components/page-components/Chatbot/windows/ChatbotBettingPreferencesWindow.vue';
 import ChatbotGamblePreferencesWindow from 'components/page-components/Chatbot/windows/ChatbotGamblePreferencesWindow.vue';
 import ChatbotCommandPreferencesWindow from 'components/page-components/Chatbot/windows/ChatbotCommandPreferencesWindow.vue';
+import OverlayWindow from '../components/windows/OverlayWindow.vue';
 
 const { ipcRenderer, remote } = electron;
 const BrowserWindow = remote.BrowserWindow;
@@ -142,6 +143,8 @@ export function getComponents() {
     ChatbotPollPreferencesWindow,
     ChatbotBettingProfileWindow,
     ChatbotBettingPreferencesWindow,
+
+    OverlayWindow,
   };
 }
 
@@ -231,6 +234,12 @@ export class WindowsService extends StatefulService<IWindowsState> {
     this.updateChildWindowOptions(options);
   }
 
+  getCurrentDisplay() {
+    const window = this.windows.main;
+    const bounds = window.getBounds();
+    return electron.screen.getDisplayMatching(bounds);
+  }
+
   closeChildWindow() {
     const windowOptions = this.state.child;
 
@@ -304,6 +313,23 @@ export class WindowsService extends StatefulService<IWindowsState> {
     newWindow.loadURL(`${indexUrl}?windowId=${windowId}`);
 
     return windowId;
+  }
+
+  createOneOffWindowForOverlay(
+    options: Partial<IWindowOptions>,
+    windowId?: string,
+  ): Electron.BrowserWindow {
+    // tslint:disable-next-line:no-parameter-reassignment TODO
+    windowId = windowId || uuid();
+
+    this.CREATE_ONE_OFF_WINDOW(windowId, options);
+
+    const newWindow = (this.windows[windowId] = new BrowserWindow(options));
+
+    const indexUrl = remote.getGlobal('indexUrl');
+    newWindow.loadURL(`${indexUrl}?windowId=${windowId}`);
+
+    return newWindow;
   }
 
   setOneOffFullscreen(windowId: string, fullscreen: boolean) {

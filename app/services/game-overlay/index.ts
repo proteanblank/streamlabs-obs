@@ -1,7 +1,7 @@
 import electron from 'electron';
-import { Subject, Subscription } from 'rxjs';
+import { fromEvent, Subject, Subscription } from 'rxjs';
 import overlay, { OverlayId } from '@streamlabs/game-overlay';
-import { take } from 'rxjs/operators';
+import { delay, take } from 'rxjs/operators';
 import { Inject } from 'util/injector';
 import { InitAfter } from 'util/service-observer';
 import { Service } from '../service';
@@ -10,45 +10,60 @@ import { CustomizationService } from 'services/customization';
 import { getPlatformService } from '../platforms';
 import { WindowsService } from '../windows';
 
-const { BrowserWindow, BrowserView } = electron.remote;
+const { BrowserWindow, BrowserView, getGlobal } = electron.remote;
+
+/**
+ * We need to show the windows so the overlay system can capture its contents.
+ * Workaround is to render them offscreen via positioning.
+ */
 const OFFSCREEN_OFFSET = 0; // 5000;
 
 @InitAfter('UserService')
+@InitAfter('WindowService')
 export class GameOverlayService extends Service {
   @Inject() userService: UserService;
   @Inject() customizationService: CustomizationService;
   @Inject() windowsService: WindowsService;
 
-  overlayId: OverlayId;
   userLoginSubscription: Subscription;
   userLogoutSubscription: Subscription;
   windows: Dictionary<Electron.BrowserWindow> = {};
-  mainWindow: Electron.BrowserWindow;
+  overlayWindow: Electron.BrowserWindow;
   onWindowsReady: Subject<Electron.BrowserWindow> = new Subject<Electron.BrowserWindow>();
+  onWindowsReady2: Subject<Electron.BrowserWindow> = new Subject<Electron.BrowserWindow>();
   isShowing = false;
 
   init() {
     console.log('initializing overlays');
     super.init();
 
-    this.onWindowsReady.pipe(take(2)).subscribe({
-      complete: () => {
-        Object.values(this.windows).forEach(win => {
-          win.showInactive();
-          // const overlayId: any = overlay.addHWND(win.getNativeWindowHandle());
-          const overlayId = overlay.add('https://google.com');
-          const [x, y] = win.getPosition();
-          console.log('position', win.getPosition());
-          overlay.setPosition(overlayId, x - OFFSCREEN_OFFSET, y, 300, 300);
-          overlay.setTransparency(255);
+    this.onWindowsReady
+      .pipe(
+        take(3),
+        delay(5000), // so recent events has time to load
+      )
+      .subscribe({
+        complete: () => {
+          Object.values(this.windows).forEach(win => {
+            // win.showInactive();
+            win.show();
 
-          // @ts-ignore: waiting for updated types
-          if (overlayId === '-1') {
-            throw new Error('Error creating overlay');
-          }
-        });
-      },
-    });
+            const overlayId = overlay.addHWND(win.getNativeWindowHandle());
+
+            if (overlayId === '-1') {
+              this.overlayWindow.hide();
+              throw new Error('Error creating overlay');
+            }
+
+            const [x, y] = win.getPosition();
+            const { width, height } = win.getBounds();
+
+            overlay.setPosition(overlayId, x - OFFSCREEN_OFFSET, y, width, height);
+            // @ts-ignore: update types
+            overlay.setTransparency(overlayId, 255);
+          });
+        },
+      });
 
     if (this.userService.isLoggedIn()) {
       this.createOverlay();
@@ -69,8 +84,14 @@ export class GameOverlayService extends Service {
   }
 
   async createOverlay() {
-    console.log('creating overlay');
     overlay.start();
+
+    const display = this.windowsService.getCurrentDisplay();
+
+    const [containerX, containerY] = [
+      display.workArea.width / 2 + 200,
+      display.workArea.height / 2 - 300,
+    ];
 
     const commonWindowOptions = {
       backgroundColor: this.customizationService.nightMode ? '#17242d' : '#fff',
@@ -85,6 +106,14 @@ export class GameOverlayService extends Service {
       },
     };
 
+    this.overlayWindow = new BrowserWindow({
+      ...commonWindowOptions,
+      height: 600,
+      width: 600,
+      x: containerX,
+      y: containerY,
+    });
+
     const commonBrowserViewOptions = {
       webPreferences: {
         nodeIntegration: false,
@@ -93,16 +122,18 @@ export class GameOverlayService extends Service {
 
     this.windows.recentEvents = new BrowserWindow({
       ...commonWindowOptions,
-      x: 20 + OFFSCREEN_OFFSET,
-      y: 20,
-      parent: this.windows.mainWindow,
+      width: 600,
+      x: containerX - 600 + OFFSCREEN_OFFSET,
+      y: containerY,
+      parent: this.overlayWindow,
     });
 
     this.windows.chat = new BrowserWindow({
       ...commonWindowOptions,
-      x: 20 + OFFSCREEN_OFFSET,
-      y: 320,
-      parent: this.windows.mainWindow,
+      x: containerX + OFFSCREEN_OFFSET,
+      y: containerY,
+      height: 600,
+      parent: this.overlayWindow,
     });
 
     const recentEventsBrowserView = new BrowserView(commonBrowserViewOptions);
@@ -117,9 +148,11 @@ export class GameOverlayService extends Service {
     );
 
     [recentEventsBrowserView, chatBrowserView].forEach(view => {
-      view.setBounds({ x: 0, y: 0, width: 300, height: 300 });
       view.setAutoResize({ width: true, height: true });
     });
+
+    recentEventsBrowserView.setBounds({ x: 0, y: 0, width: 600, height: 300 });
+    chatBrowserView.setBounds({ x: 0, y: 0, width: 300, height: 600 });
 
     recentEventsBrowserView.webContents.loadURL(this.userService.recentEventsUrl());
     chatBrowserView.webContents.loadURL(
@@ -132,6 +165,34 @@ export class GameOverlayService extends Service {
     this.windows.recentEvents.addBrowserView(recentEventsBrowserView);
     // @ts-ignore: this is supported in our fork
     this.windows.chat.addBrowserView(chatBrowserView);
+
+    this.windows.overlayControls = this.windowsService.createOneOffWindowForOverlay(
+      {
+        ...commonWindowOptions,
+        // @ts-ignore
+        webPreferences: {},
+        parent: this.overlayWindow,
+        x: containerX - 600 + OFFSCREEN_OFFSET,
+        y: containerY + 300,
+        width: 600,
+        height: 300,
+        // OneOffWindow options
+        isFullScreen: true,
+        componentName: 'OverlayWindow',
+      },
+      'overlay',
+    );
+
+    // Listen for the second dom-ready as we trigger a reload as a workaround for a blank screen
+    fromEvent(this.windows.overlayControls.webContents, 'dom-ready')
+      .pipe(take(2))
+      .subscribe({
+        complete: () => this.onWindowsReady.next(this.windows.overlayControls),
+      });
+
+    this.windows.overlayControls.webContents.once('dom-ready', () => {
+      this.windows.overlayControls.reload();
+    });
   }
 
   focusOverlayWindow() {
