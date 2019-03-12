@@ -11,7 +11,6 @@
         <h4>{{ $t('Preview') }}</h4>
         <display class="live-display" :drawUI="false" />
       </div>
-      <div />
     </div>
     <div slot="controls" class="controls">
       <div class="live-dock-viewer-count">

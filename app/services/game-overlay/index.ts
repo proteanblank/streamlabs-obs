@@ -10,7 +10,7 @@ import { CustomizationService } from 'services/customization';
 import { getPlatformService } from '../platforms';
 import { WindowsService } from '../windows';
 
-const { BrowserWindow, BrowserView, getGlobal } = electron.remote;
+const { BrowserWindow, BrowserView } = electron.remote;
 
 /**
  * We need to show the windows so the overlay system can capture its contents.
@@ -27,10 +27,13 @@ export class GameOverlayService extends Service {
 
   userLoginSubscription: Subscription;
   userLogoutSubscription: Subscription;
-  windows: Dictionary<Electron.BrowserWindow> = {};
+  windows: {
+    chat: Electron.BrowserWindow;
+    recentEvents: Electron.BrowserWindow;
+    overlayControls: Electron.BrowserWindow;
+  } = {} as any;
   overlayWindow: Electron.BrowserWindow;
   onWindowsReady: Subject<Electron.BrowserWindow> = new Subject<Electron.BrowserWindow>();
-  onWindowsReady2: Subject<Electron.BrowserWindow> = new Subject<Electron.BrowserWindow>();
   isShowing = false;
 
   init() {
@@ -44,6 +47,7 @@ export class GameOverlayService extends Service {
       )
       .subscribe({
         complete: () => {
+          console.log('showing windows');
           Object.values(this.windows).forEach(win => {
             // win.showInactive();
             win.show();
