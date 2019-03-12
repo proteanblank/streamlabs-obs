@@ -7,7 +7,7 @@
           <div class="scene-selector-wrapper"><scene-selector /></div>
         </div>
       </div>
-      <div class="live-preview">
+      <div class="live-preview" v-if="isPreviewEnabled">
         <h4>{{ $t('Preview') }}</h4>
         <display class="live-display" :drawUI="false" />
       </div>
