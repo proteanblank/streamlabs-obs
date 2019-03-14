@@ -38,8 +38,6 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
     isPreviewEnabled: true,
   };
 
-  userLoginSubscription: Subscription;
-  userLogoutSubscription: Subscription;
   windows: {
     chat: Electron.BrowserWindow;
     recentEvents: Electron.BrowserWindow;
@@ -48,9 +46,10 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
   overlayWindow: Electron.BrowserWindow;
   onWindowsReady: Subject<Electron.BrowserWindow> = new Subject<Electron.BrowserWindow>();
   onWindowsReadySubscription: Subscription;
+  userLoginSubscription: Subscription;
+  userLogoutSubscription: Subscription;
 
   init() {
-    console.log('initializing overlays');
     super.init();
 
     if (!this.state.isEnabled) {
@@ -99,15 +98,13 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
             const [x, y] = win.getPosition();
             const { width, height } = win.getBounds();
 
-            console.log([x, y, x - OFFSCREEN_OFFSET]);
             overlay.setPosition(overlayId, x - OFFSCREEN_OFFSET, y, width, height);
-            // @ts-ignore: update types
             overlay.setTransparency(overlayId, 255);
           });
         },
       });
 
-    const display = this.windowsService.getCurrentDisplay();
+    const display = this.windowsService.getMainWindowDisplay();
 
     const [containerX, containerY] = [
       display.workArea.width / 2 + 200 + OFFSCREEN_OFFSET,
