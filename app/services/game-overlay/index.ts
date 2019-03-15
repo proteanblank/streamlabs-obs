@@ -4,7 +4,7 @@ import { delay, take } from 'rxjs/operators';
 import overlay, { OverlayThreadStatus } from '@streamlabs/game-overlay';
 import { Inject } from 'util/injector';
 import { InitAfter } from 'util/service-observer';
-import { UserService } from 'services/user';
+import { LoginLifecycle, UserService } from 'services/user';
 import { CustomizationService } from 'services/customization';
 import { getPlatformService } from '../platforms';
 import { WindowsService } from '../windows';
@@ -46,26 +46,19 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
   overlayWindow: Electron.BrowserWindow;
   onWindowsReady: Subject<Electron.BrowserWindow> = new Subject<Electron.BrowserWindow>();
   onWindowsReadySubscription: Subscription;
-  userLoginSubscription: Subscription;
-  userLogoutSubscription: Subscription;
+  lifecycle: LoginLifecycle;
 
-  init() {
+  async init() {
     super.init();
 
     if (!this.state.isEnabled) {
       return;
     }
 
-    if (this.userService.isLoggedIn()) {
-      this.createOverlay();
-    }
-
-    this.userLoginSubscription = this.userService.userLogin.subscribe(() => {
-      this.createOverlay();
-    });
-
-    this.userLogoutSubscription = this.userService.userLogout.subscribe(() => {
-      this.destroyOverlay();
+    this.lifecycle = await this.userService.withLifecycle({
+      init: this.createOverlay,
+      destroy: this.destroyOverlay,
+      context: this,
     });
 
     // TODO: better way to track shutdown
@@ -288,8 +281,12 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
     this.state.isEnabled = shouldEnable;
   }
 
+  async destroyed() {
+    await this.lifecycle.destroy();
+  }
+
   // FIXME: this should also be invoked on destroy but we dont seem to have an opposite to mounted, init, etc
-  destroyOverlay() {
+  async destroyOverlay() {
     overlay.stop();
     this.onWindowsReadySubscription.unsubscribe();
     Object.values(this.windows).forEach(win => win.destroy());

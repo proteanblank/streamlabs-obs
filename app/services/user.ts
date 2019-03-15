@@ -4,7 +4,7 @@ import { defer } from 'lodash';
 import { PersistentStatefulService } from 'services/persistent-stateful-service';
 import { Inject } from 'util/injector';
 import { handleResponse, authorizedHeaders } from 'util/requests';
-import { mutation } from 'services/stateful-service';
+import { mutation, Service } from 'services/stateful-service';
 import electron from 'electron';
 import { HostsService } from './hosts';
 import { ChatbotApiService } from './chatbot';
@@ -27,6 +27,16 @@ import { NavigationService } from './navigation';
 interface IUserServiceState {
   auth?: IPlatformAuth;
 }
+
+export type LoginLifecycleOptions = {
+  init: () => Promise<void>;
+  destroy: () => Promise<void>;
+  context: Service;
+};
+
+export type LoginLifecycle = {
+  destroy: () => Promise<void>;
+};
 
 export class UserService extends PersistentStatefulService<IUserServiceState> {
   @Inject() private hostsService: HostsService;
@@ -399,6 +409,26 @@ export class UserService extends PersistentStatefulService<IUserServiceState> {
       },
       'RecentEvents',
     );
+  }
+
+  async withLifecycle({ init, destroy, context }: LoginLifecycleOptions): Promise<LoginLifecycle> {
+    const doInit = init.bind(context);
+    const doDestroy = destroy.bind(context);
+
+    const userLoginSubscription = this.userLogin.subscribe(() => doInit());
+    const userLogoutSubscription = this.userLogout.subscribe(() => doDestroy());
+
+    if (this.isLoggedIn()) {
+      await doInit();
+    }
+
+    return {
+      destroy: async () => {
+        userLoginSubscription.unsubscribe();
+        userLogoutSubscription.unsubscribe();
+        await doDestroy();
+      },
+    } as LoginLifecycle;
   }
 }
 
