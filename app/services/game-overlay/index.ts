@@ -285,7 +285,6 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
     await this.lifecycle.destroy();
   }
 
-  // FIXME: this should also be invoked on destroy but we dont seem to have an opposite to mounted, init, etc
   async destroyOverlay() {
     overlay.stop();
     this.onWindowsReadySubscription.unsubscribe();
