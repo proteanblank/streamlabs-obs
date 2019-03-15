@@ -1,7 +1,7 @@
 import electron from 'electron';
 import { fromEvent, Subject, Subscription } from 'rxjs';
-import overlay, { OverlayThreadStatus } from '@streamlabs/game-overlay';
 import { delay, take } from 'rxjs/operators';
+import overlay, { OverlayThreadStatus } from '@streamlabs/game-overlay';
 import { Inject } from 'util/injector';
 import { InitAfter } from 'util/service-observer';
 import { UserService } from 'services/user';
@@ -79,13 +79,12 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
 
     this.onWindowsReadySubscription = this.onWindowsReady
       .pipe(
-        take(3),
+        take(Object.keys(this.windows).length),
         delay(5000), // so recent events has time to load
       )
       .subscribe({
         complete: () => {
           Object.values(this.windows).forEach(win => {
-            // win.showInactive();
             win.showInactive();
 
             const overlayId = overlay.addHWND(win.getNativeWindowHandle());
@@ -135,6 +134,7 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
     const commonBrowserViewOptions = {
       webPreferences: {
         nodeIntegration: false,
+        contextIsolation: true,
       },
     };
 
@@ -157,20 +157,30 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
     const recentEventsBrowserView = new BrowserView(commonBrowserViewOptions);
     const chatBrowserView = new BrowserView(commonBrowserViewOptions);
 
-    recentEventsBrowserView.webContents.once('did-finish-load', () => {
+    this.windows.recentEvents.webContents.once('did-finish-load', () => {
       this.onWindowsReady.next(this.windows.recentEvents);
     });
 
-    chatBrowserView.webContents.once('did-finish-load', () =>
+    this.windows.chat.webContents.once('did-finish-load', () =>
       this.onWindowsReady.next(this.windows.chat),
     );
 
-    [recentEventsBrowserView, chatBrowserView].forEach(view => {
-      view.setAutoResize({ width: true, height: true });
+    const makeDraggable = `
+      document.querySelector('body').style['-webkit-app-region'] = 'drag';
+      const el = document.querySelector('.tw-absolute')
+      if (el) { el.style['-webkit-app-region'] = 'drag' };
+      
+      document.styleSheets[0].addRule("li, a, button, input, .mission-control-wrapper, .mission-control, .room-selector .rooms-header .tw-flex, .chat-room", "-webkit-app-region: no-drag", 1);
+    `;
+
+    this.windows.recentEvents.setBounds({
+      x: containerX - 600,
+      y: containerY,
+      width: 600,
+      height: 300,
     });
 
-    recentEventsBrowserView.setBounds({ x: 0, y: 0, width: 600, height: 300 });
-    chatBrowserView.setBounds({ x: 0, y: 0, width: 300, height: 600 });
+    this.windows.chat.setBounds({ x: containerX, y: containerY, width: 300, height: 600 });
 
     recentEventsBrowserView.webContents.loadURL(this.userService.recentEventsUrl());
     chatBrowserView.webContents.loadURL(
@@ -179,10 +189,18 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
       ),
     );
 
-    // @ts-ignore: this is supported in our fork
-    this.windows.recentEvents.addBrowserView(recentEventsBrowserView);
-    // @ts-ignore: this is supported in our fork
-    this.windows.chat.addBrowserView(chatBrowserView);
+    for (const view of [this.windows.recentEvents, this.windows.chat]) {
+      view.webContents.once('dom-ready', async () => {
+        await view.webContents.executeJavaScript(makeDraggable);
+      });
+    }
+
+    this.windows.recentEvents.loadURL(this.userService.recentEventsUrl());
+    this.windows.chat.loadURL(
+      await getPlatformService(this.userService.platform.type).getChatUrl(
+        this.customizationService.nightMode ? 'night' : 'day',
+      ),
+    );
 
     this.windows.overlayControls = this.windowsService.createOneOffWindowForOverlay(
       {
@@ -208,8 +226,9 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
         complete: () => this.onWindowsReady.next(this.windows.overlayControls),
       });
 
-    this.windows.overlayControls.webContents.once('dom-ready', () => {
+    this.windows.overlayControls.webContents.once('dom-ready', async () => {
       this.windows.overlayControls.reload();
+      await this.windows.overlayControls.webContents.executeJavaScript(makeDraggable);
     });
   }
 
