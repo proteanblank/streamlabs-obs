@@ -95,7 +95,7 @@
     "serial": true
   },
   "dependencies": {
-    "@streamlabs/game-overlay": "../streamlabs-overlay",
+    "@streamlabs/game-overlay": "https://s3-us-west-2.amazonaws.com/obs-studio-deployment/game-overlay-v0.0.1.tar.gz",
     "archiver": "2.1.1",
     "aws-sdk": "^2.344.0",
     "backtrace-node": "^0.7.3",
