@@ -13,17 +13,33 @@ import { mutation } from '../stateful-service';
 
 const { BrowserWindow, BrowserView } = electron.remote;
 
+export type GameOverlayState = {
+  isEnabled: boolean;
+  isShowing: boolean;
+  isPreviewEnabled: boolean;
+};
+
 /**
  * We need to show the windows so the overlay system can capture its contents.
  * Workaround is to render them offscreen via positioning.
  */
 const OFFSCREEN_OFFSET = 5000;
 
-export type GameOverlayState = {
-  isEnabled: boolean;
-  isShowing: boolean;
-  isPreviewEnabled: boolean;
-};
+/**
+ * JavaScript code to make windows draggable without a titlebar.
+ */
+const makeDraggable = `
+  document.querySelector('body').style['-webkit-app-region'] = 'drag';
+  // Twitch seems to be using React portals so "body" doesn't work.
+  const el = document.querySelector('.tw-absolute')
+  if (el) { el.style['-webkit-app-region'] = 'drag' };
+  /*
+   * Restore input for specific elements, list items, links, buttons and inputs.
+   * Custom selectors are for: Recent Events body/tables, Twitch room selector, chat and bottom section
+   *
+   */    
+  document.styleSheets[0].addRule("li, a, button, input, .mission-control-wrapper, .accordions, .room-selector .rooms-header .tw-flex, .chat-room", "-webkit-app-region: no-drag", 1);
+`;
 
 @InitAfter('UserService')
 @InitAfter('WindowsService')
@@ -77,31 +93,11 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
       )
       .subscribe({
         complete: () => {
-          Object.values(this.windows).forEach(win => {
-            win.showInactive();
-
-            const overlayId = overlay.addHWND(win.getNativeWindowHandle());
-
-            if (overlayId.toString() === '-1') {
-              this.overlayWindow.hide();
-              throw new Error('Error creating overlay');
-            }
-
-            const [x, y] = win.getPosition();
-            const { width, height } = win.getBounds();
-
-            overlay.setPosition(overlayId, x - OFFSCREEN_OFFSET, y, width, height);
-            overlay.setTransparency(overlayId, 255);
-          });
+          this.createWindowOverlays();
         },
       });
 
-    const display = this.windowsService.getMainWindowDisplay();
-
-    const [containerX, containerY] = [
-      display.workArea.width / 2 + 200 + OFFSCREEN_OFFSET,
-      display.workArea.height / 2 - 300,
-    ];
+    const [containerX, containerY] = this.getWindowContainerStartingPosition();
 
     const commonWindowOptions = {
       backgroundColor: this.customizationService.nightMode ? '#17242d' : '#fff',
@@ -147,9 +143,6 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
       parent: this.overlayWindow,
     });
 
-    const recentEventsBrowserView = new BrowserView(commonBrowserViewOptions);
-    const chatBrowserView = new BrowserView(commonBrowserViewOptions);
-
     this.windows.recentEvents.webContents.once('did-finish-load', () => {
       this.onWindowsReady.next(this.windows.recentEvents);
     });
@@ -157,14 +150,6 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
     this.windows.chat.webContents.once('did-finish-load', () =>
       this.onWindowsReady.next(this.windows.chat),
     );
-
-    const makeDraggable = `
-      document.querySelector('body').style['-webkit-app-region'] = 'drag';
-      const el = document.querySelector('.tw-absolute')
-      if (el) { el.style['-webkit-app-region'] = 'drag' };
-      
-      document.styleSheets[0].addRule("li, a, button, input, .mission-control-wrapper, .mission-control, .room-selector .rooms-header .tw-flex, .chat-room", "-webkit-app-region: no-drag", 1);
-    `;
 
     this.windows.recentEvents.setBounds({
       x: containerX - 600,
@@ -174,13 +159,6 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
     });
 
     this.windows.chat.setBounds({ x: containerX, y: containerY, width: 300, height: 600 });
-
-    recentEventsBrowserView.webContents.loadURL(this.userService.recentEventsUrl());
-    chatBrowserView.webContents.loadURL(
-      await getPlatformService(this.userService.platform.type).getChatUrl(
-        this.customizationService.nightMode ? 'night' : 'day',
-      ),
-    );
 
     for (const view of [this.windows.recentEvents, this.windows.chat]) {
       view.webContents.once('dom-ready', async () => {
@@ -289,5 +267,30 @@ export class GameOverlayService extends PersistentStatefulService<GameOverlaySta
     overlay.stop();
     this.onWindowsReadySubscription.unsubscribe();
     Object.values(this.windows).forEach(win => win.destroy());
+  }
+
+  private createWindowOverlays() {
+    Object.values(this.windows).forEach(win => {
+      win.showInactive();
+
+      const overlayId = overlay.addHWND(win.getNativeWindowHandle());
+
+      if (overlayId.toString() === '-1') {
+        this.overlayWindow.hide();
+        throw new Error('Error creating overlay');
+      }
+
+      const [x, y] = win.getPosition();
+      const { width, height } = win.getBounds();
+
+      overlay.setPosition(overlayId, x - OFFSCREEN_OFFSET, y, width, height);
+      overlay.setTransparency(overlayId, 255);
+    });
+  }
+
+  private getWindowContainerStartingPosition() {
+    const display = this.windowsService.getMainWindowDisplay();
+
+    return [display.workArea.width / 2 + 200 + OFFSCREEN_OFFSET, display.workArea.height / 2 - 300];
   }
 }
