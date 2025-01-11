@@ -24,13 +24,13 @@ import { WidgetLayout } from './common/WidgetLayout';
 import { CaretRightOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import { TAlertType } from '../../services/widgets/alerts-config';
 import { useAlertBox } from './useAlertBox';
-import { useForceUpdate } from '../hooks';
-import electron from 'electron';
 import { Services } from '../service-provider';
 import { ButtonGroup } from '../shared/ButtonGroup';
 import { LayoutInput } from './common/LayoutInput';
 import InputWrapper from '../shared/inputs/InputWrapper';
+import * as remote from '@electron/remote';
 import { assertIsDefined } from '../../util/properties-type-guards';
+import { useForceUpdate } from 'slap';
 
 /**
  * Root component
@@ -163,7 +163,7 @@ function AlertsList() {
                 playAlert(alertEvent.type);
               }}
               type={'text'}
-              style={{ position: 'absolute', right: '16px' }}
+              style={{ position: 'absolute', right: '16px', top: '8px' }}
               icon={<CaretRightOutlined style={{ fontSize: '36px', color: 'white' }} />}
             />
           </Tooltip>
@@ -293,7 +293,7 @@ function DonationSettings() {
   }
 
   function openTipPageSettings() {
-    electron.remote.shell.openExternal(`https://${host}/editor?ref=slobs`);
+    remote.shell.openExternal(`https://${host}/editor?ref=slobs`);
     UsageStatisticsService.actions.recordFeatureUsage('openDonationSettings');
   }
 

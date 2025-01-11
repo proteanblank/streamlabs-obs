@@ -9,6 +9,8 @@ import { $t } from 'services/i18n';
 import { Modal, Button, Form, Tooltip } from 'antd';
 import { CheckboxInput } from 'components-react/shared/inputs';
 import { Source } from 'services/sources';
+import * as remote from '@electron/remote';
+import { useChildWindowParams } from 'components-react/hooks';
 
 interface ICapturableOption {
   description: string;
@@ -41,7 +43,7 @@ function useCaptureSource(sourceId: string): ICaptureSourceApi {
   const settings = useMemo(() => source.getSettings(), []);
   const [options, setOptions] = useState<ICapturableOption[]>([]);
   const [selectedOption, setSelectedOption] = useState<string>(settings['capture_source_list']);
-  const [captureCursor, setCaptureCursor] = useState(settings['capture_cursor']);
+  const [captureCursor, setCaptureCursor] = useState<boolean>(settings['capture_cursor'] ?? true);
 
   function buildSetter<TVal>(
     source: Source,
@@ -58,10 +60,13 @@ function useCaptureSource(sourceId: string): ICaptureSourceApi {
 
   useEffect(() => {
     (async () => {
-      const windows = await electron.desktopCapturer.getSources({
-        types: ['window'],
-        fetchWindowIcons: true,
-      });
+      const windows: Electron.DesktopCapturerSource[] = await electron.ipcRenderer.invoke(
+        'DESKTOP_CAPTURER_GET_SOURCES',
+        {
+          types: ['window'],
+          fetchWindowIcons: true,
+        },
+      );
       const windowOptions = windows.map(win => {
         const opt: ICapturableOption = {
           description: win.name,
@@ -75,9 +80,12 @@ function useCaptureSource(sourceId: string): ICaptureSourceApi {
       });
 
       // Attempt to get thumbnails for screens
-      const screenData = await electron.desktopCapturer.getSources({ types: ['screen'] });
+      const screenData: Electron.DesktopCapturerSource[] = await electron.ipcRenderer.invoke(
+        'DESKTOP_CAPTURER_GET_SOURCES',
+        { types: ['screen'] },
+      );
 
-      const screenOptions = electron.remote.screen.getAllDisplays().map((screen, index) => {
+      const screenOptions = remote.screen.getAllDisplays().map((screen, index) => {
         const opt: ICapturableOption = {
           description: `Screen ${index + 1}`,
           value: `monitor:${index}`,
@@ -113,7 +121,7 @@ function useCaptureSource(sourceId: string): ICaptureSourceApi {
 
 export default function ScreenCaptureProperties() {
   const { WindowsService } = Services;
-  const sourceId = useMemo(() => WindowsService.getChildWindowQueryParams().sourceId, []);
+  const sourceId = useChildWindowParams('sourceId');
   const sourceApi = useCaptureSource(sourceId);
   const [modal, setModal] = useState(false);
 

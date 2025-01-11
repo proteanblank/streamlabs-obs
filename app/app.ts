@@ -1,4 +1,5 @@
 /*global SLOBS_BUNDLE_ID*/
+/*global SLD_SENTRY_BACKEND_SERVER_URL, SLD_SENTRY_FRONTEND_DSN, SLD_SENTRY_BACKEND_SERVER_PREVIEW_URL*/
 
 import { I18nService, $t } from 'services/i18n';
 
@@ -30,25 +31,20 @@ import * as obs from '../obs-api';
 import path from 'path';
 import util from 'util';
 import uuid from 'uuid/v4';
-import Blank from 'components/windows/Blank.vue';
 import Main from 'components/windows/Main.vue';
-import { Loader } from 'components/shared/ReactComponentList';
+import { Loader, Blank } from 'components/shared/ReactComponentList';
 import process from 'process';
 import { MetricsService } from 'services/metrics';
 import { UsageStatisticsService } from 'services/usage-statistics';
+import * as remote from '@electron/remote';
+import { RealmService } from 'app-services';
 
-const { ipcRenderer, remote, app, contentTracing } = electron;
+const { ipcRenderer } = electron;
 const slobsVersion = Utils.env.SLOBS_VERSION;
 const isProduction = Utils.env.NODE_ENV === 'production';
 const isPreview = !!Utils.env.SLOBS_PREVIEW;
 
-// This is the development DSN
-let sentryDsn = 'https://8f444a81edd446b69ce75421d5e91d4d@sentry.io/252950';
-
 if (isProduction) {
-  // This is the production DSN
-  sentryDsn = 'https://6971fa187bb64f58ab29ac514aa0eb3d@sentry.io/251674';
-
   electron.crashReporter.addExtraParameter('windowId', Utils.getWindowId());
 }
 
@@ -131,7 +127,7 @@ if (isProduction || process.env.SLOBS_REPORT_TO_SENTRY) {
   const bundleNames = electron.ipcRenderer.sendSync('getBundleNames', bundles);
 
   Sentry.init({
-    dsn: sentryDsn,
+    dsn: SLD_SENTRY_FRONTEND_DSN,
     release: `${slobsVersion}-${SLOBS_BUNDLE_ID}`,
     beforeSend: (event, hint) => {
       // Because our URLs are local files and not publicly
@@ -231,7 +227,7 @@ document.addEventListener('dragover', event => event.preventDefault());
 document.addEventListener('dragenter', event => event.preventDefault());
 document.addEventListener('drop', event => event.preventDefault());
 
-const ctxMenu = electron.remote.Menu.buildFromTemplate([
+const ctxMenu = remote.Menu.buildFromTemplate([
   { role: 'copy', accelerator: 'CommandOrControl+C' },
   { role: 'paste', accelerator: 'CommandOrControl+V' },
 ]);
@@ -255,10 +251,12 @@ export const apiInitErrorResultToMessage = (resultCode: obs.EVideoCodes) => {
 };
 
 const showDialog = (message: string): void => {
-  electron.remote.dialog.showErrorBox('Initialization Error', message);
+  remote.dialog.showErrorBox('Initialization Error', message);
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
+  await RealmService.instance.connect();
+
   const store = createStore();
 
   // setup VueI18n plugin
@@ -276,7 +274,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   I18nService.setVuei18nInstance(i18n);
 
-  if (!Utils.isOneOffWindow()) {
+  // We don't register main/child windows in dev mode to allow refreshing
+  if (!Utils.isOneOffWindow() && !Utils.isDevMode()) {
     ipcRenderer.send('register-in-crash-handler', { pid: process.pid, critical: false });
   }
 
@@ -292,10 +291,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     window['obs'] = obs;
 
     // Host a new OBS server instance
-    obs.IPC.host(electron.remote.process.env.IPC_UUID);
+    obs.IPC.host(remote.process.env.IPC_UUID);
     obs.NodeObs.SetWorkingDirectory(
       path.join(
-        electron.remote.app.getAppPath().replace('app.asar', 'app.asar.unpacked'),
+        remote.app.getAppPath().replace('app.asar', 'app.asar.unpacked'),
         'node_modules',
         'obs-studio-node',
       ),
@@ -307,7 +306,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const apiResult = obs.NodeObs.OBS_API_initAPI(
       'en-US',
       appService.appDataDirectory,
-      electron.remote.process.env.SLOBS_VERSION,
+      remote.process.env.SLOBS_VERSION,
+      isPreview ? SLD_SENTRY_BACKEND_SERVER_PREVIEW_URL : SLD_SENTRY_BACKEND_SERVER_URL,
     );
 
     if (apiResult !== obs.EVideoCodes.Success) {
@@ -374,7 +374,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let mainWindowShowTime = 0;
   if (Utils.isMainWindow()) {
-    electron.remote.getCurrentWindow().show();
+    remote.getCurrentWindow().show();
     mainWindowShowTime = Date.now();
   }
 

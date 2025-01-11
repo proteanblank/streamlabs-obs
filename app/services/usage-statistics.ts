@@ -5,12 +5,12 @@ import { UserService } from './user';
 import { HostsService } from './hosts';
 import fs from 'fs';
 import path from 'path';
-import electron from 'electron';
 import { authorizedHeaders, handleResponse } from 'util/requests';
 import throttle from 'lodash/throttle';
 import { Service } from './core/service';
 import Utils from './utils';
 import os from 'os';
+import * as remote from '@electron/remote';
 
 export type TUsageEvent = 'stream_start' | 'stream_end' | 'app_start' | 'app_close' | 'crash';
 
@@ -35,8 +35,18 @@ type TAnalyticsEvent =
   | 'Shown'
   | 'AppStart'
   | 'Highlighter'
+  | 'AIHighlighter'
   | 'Hardware'
-  | 'WebcamUse';
+  | 'WebcamUse'
+  | 'MicrophoneUse'
+  | 'GuestCam'
+  | 'RecordingHistory'
+  | 'DualOutput'
+  | 'StreamToTikTokSettings'
+  | 'StreamCustomDestinations'
+  | 'TikTokLiveAccess'
+  | 'TwitchCredentialsAlert'
+  | 'TikTokApplyPrompt';
 
 interface IAnalyticsEvent {
   product: string;
@@ -102,7 +112,7 @@ export class UsageStatisticsService extends Service {
     let installerId = localStorage.getItem('installerId');
 
     if (!installerId) {
-      const exePath = electron.remote.app.getPath('exe');
+      const exePath = remote.app.getPath('exe');
       const installerNamePath = path.join(path.dirname(exePath), 'installername');
 
       if (fs.existsSync(installerNamePath)) {
@@ -205,8 +215,8 @@ export class UsageStatisticsService extends Service {
     this.recordAnalyticsEvent('Click', { component, target });
   }
 
-  recordShown(component: string) {
-    this.recordAnalyticsEvent('Shown', { component });
+  recordShown(component: string, target?: string) {
+    this.recordAnalyticsEvent('Shown', { component, target });
   }
 
   /**

@@ -1,6 +1,9 @@
 import { Service } from 'services/core/service';
 import { Inject } from 'services/core/injector';
-import { SceneCollectionsServerApiService } from 'services/scene-collections/server-api';
+import {
+  IServerSceneCollection,
+  SceneCollectionsServerApiService,
+} from 'services/scene-collections/server-api';
 import { RootNode } from './nodes/root';
 import { SourcesNode, ISourceInfo } from './nodes/sources';
 import { ScenesNode, ISceneSchema } from './nodes/scenes';
@@ -9,11 +12,9 @@ import { TransitionsNode } from './nodes/transitions';
 import { HotkeysNode } from './nodes/hotkeys';
 import { SceneFiltersNode } from './nodes/scene-filters';
 import path from 'path';
-import electron from 'electron';
-import fs from 'fs';
 import { parse } from './parse';
-import { ScenesService } from 'services/scenes';
-import { SourcesService } from 'services/sources';
+import { ScenesService, TSceneNode } from 'services/scenes';
+import { SourcesService, TSourceType } from 'services/sources';
 import { E_AUDIO_CHANNELS } from 'services/audio';
 import { AppService } from 'services/app';
 import { RunInLoadingMode } from 'services/app/app-decorators';
@@ -38,19 +39,25 @@ import { StreamingService, EStreamingState } from 'services/streaming';
 import { DefaultHardwareService } from 'services/hardware';
 import { byOS, OS, getOS } from 'util/operating-systems';
 import Utils from 'services/utils';
-import { getPlatformService, IPlatformCapabilityResolutionPreset } from '../platforms';
-import { OutputSettingsService } from '../settings';
+import * as remote from '@electron/remote';
+import { GuestCamNode } from './nodes/guest-cam';
+import { DualOutputService } from 'services/dual-output';
+import { NodeMapNode } from './nodes/node-map';
+import { VideoSettingsService } from 'services/settings-v2';
+import { WidgetsService, WidgetType } from 'services/widgets';
 
 const uuid = window['require']('uuid/v4');
 
 export const NODE_TYPES = {
   RootNode,
+  NodeMapNode,
   SourcesNode,
   ScenesNode,
   SceneItemsNode,
   TransitionsNode,
   HotkeysNode,
   SceneFiltersNode,
+  GuestCamNode,
   TransitionNode: TransitionsNode, // Alias old name to new node
 };
 
@@ -58,7 +65,7 @@ interface ISceneCollectionInternalCreateOptions extends ISceneCollectionCreateOp
   /** A function that can be used to set up some state.
    * This should really only be used by the OBS importer.
    */
-  setupFunction?: () => boolean;
+  setupFunction?: () => boolean | Promise<boolean>;
 
   auto?: boolean;
 }
@@ -85,8 +92,10 @@ export class SceneCollectionsService extends Service implements ISceneCollection
   @Inject() tcpServerService: TcpServerService;
   @Inject() transitionsService: TransitionsService;
   @Inject() streamingService: StreamingService;
+  @Inject() dualOutputService: DualOutputService;
+  @Inject() videoSettingsService: VideoSettingsService;
   @Inject() private defaultHardwareService: DefaultHardwareService;
-  @Inject() private outputSettingsService: OutputSettingsService;
+  @Inject() private widgetsService: WidgetsService;
 
   collectionAdded = new Subject<ISceneCollectionsManifestEntry>();
   collectionRemoved = new Subject<ISceneCollectionsManifestEntry>();
@@ -105,6 +114,11 @@ export class SceneCollectionsService extends Service implements ISceneCollection
    * true if the scene-collections sync in progress
    */
   private syncPending = false;
+
+  /**
+   * Used to handle actions for users on their first login
+   */
+  newUserFirstLogin = false;
 
   /**
    * Does not use the standard init function so we can have asynchronous
@@ -189,7 +203,7 @@ export class SceneCollectionsService extends Service implements ISceneCollection
         await this.attemptRecovery(id);
       } else {
         console.warn(`Unsuccessful recovery of scene collection ${id} attempted`);
-        electron.remote.dialog.showMessageBox(Utils.getMainWindow(), {
+        remote.dialog.showMessageBox(Utils.getMainWindow(), {
           title: 'Streamlabs Desktop',
           message: $t('Failed to load scene collection.  A new one will be created instead.'),
         });
@@ -217,7 +231,7 @@ export class SceneCollectionsService extends Service implements ISceneCollection
     await this.setActiveCollection(id);
     if (options.needsRename) this.stateService.SET_NEEDS_RENAME(id);
 
-    if (options.setupFunction && options.setupFunction()) {
+    if (options.setupFunction && (await options.setupFunction())) {
       // Do nothing
     } else {
       this.setupEmptyCollection();
@@ -303,7 +317,7 @@ export class SceneCollectionsService extends Service implements ISceneCollection
    * @param name the name of the new scene collection
    * @param id An optional ID, if omitted the active collection ID is used
    */
-  async duplicate(name: string, id?: string) {
+  async duplicate(name: string, id?: string): Promise<string | undefined> {
     const oldId = id ?? this.activeCollection?.id;
     if (oldId == null) return;
 
@@ -313,9 +327,44 @@ export class SceneCollectionsService extends Service implements ISceneCollection
     await this.disableAutoSave();
 
     const newId = uuid();
-    await this.insertCollection(newId, name, oldColl.operatingSystem, false, oldId);
-    this.stateService.SET_NEEDS_RENAME(newId);
+    const duplicatedName = $t('Copy of %{collectionName}', { collectionName: name });
+    const collection = await this.insertCollection(
+      newId,
+      duplicatedName,
+      oldColl.operatingSystem,
+      false,
+      oldId,
+    );
     this.enableAutoSave();
+
+    return collection.id;
+  }
+
+  /**
+   * Convert a dual output scene to a vanilla scene
+   * @remark This duplicates the scene collection before conversion to prevent loss of data
+   * @params Boolean for if the vertical sources should be assigned to the horizontal display
+   * @returns String filepath for new collection
+   */
+  @RunInLoadingMode()
+  async convertDualOutputCollection(
+    assignToHorizontal: boolean = false,
+    collectionId?: string,
+  ): Promise<string | undefined> {
+    const collection = collectionId ? this.getCollection(collectionId) : this.activeCollection;
+    const name = `${collection?.name} - Converted`;
+
+    const newCollectionId = await this.duplicate(name, collectionId);
+
+    if (!newCollectionId) return;
+
+    this.dualOutputService.setDualOutputMode(false);
+
+    await this.load(newCollectionId);
+
+    await this.convertToVanillaSceneCollection(assignToHorizontal);
+
+    return this.stateService.getCollectionFilePath(newCollectionId);
   }
 
   downloadProgress = new Subject<IDownloadProgress>();
@@ -348,6 +397,16 @@ export class SceneCollectionsService extends Service implements ISceneCollection
    */
   @RunInLoadingMode()
   async loadOverlay(filePath: string, name: string) {
+    // Save the current audio devices for Desktop Audio and Mic so when we
+    // install a new overlay they're preserved.
+    // TODO: this only works if the user sources have the default names
+
+    // We always pass a desktop audio device in, since we might've found a bug that
+    // when installing a new overlay the device is not set and while it seems
+    // to behave correctly, it is blank on device properties.
+    const desktopAudioDevice = this.getDeviceIdFor('Desktop Audio') || 'default';
+    const micDevice = this.getDeviceIdFor('Mic/Aux');
+
     await this.deloadCurrentApplicationState();
 
     const id: string = uuid();
@@ -356,7 +415,7 @@ export class SceneCollectionsService extends Service implements ISceneCollection
 
     try {
       await this.overlaysPersistenceService.loadOverlay(filePath);
-      this.setupDefaultAudio();
+      this.setupDefaultAudio(desktopAudioDevice, micDevice);
     } catch (e: unknown) {
       // We tried really really hard :(
       console.error('Overlay installation failed', e);
@@ -366,6 +425,10 @@ export class SceneCollectionsService extends Service implements ISceneCollection
 
     this.collectionLoaded = true;
     await this.save();
+  }
+
+  private getDeviceIdFor(sourceName: 'Desktop Audio' | 'Mic/Aux'): string | undefined {
+    return this.sourcesService.views.getSourcesByName(sourceName)[0]?.getSettings()?.device_id;
   }
 
   /**
@@ -467,6 +530,10 @@ export class SceneCollectionsService extends Service implements ISceneCollection
     return this.stateService.activeCollection;
   }
 
+  get sceneNodeMaps() {
+    return this.stateService.sceneNodeMaps;
+  }
+
   /* PRIVATE ----------------------------------------------------- */
 
   /**
@@ -476,6 +543,9 @@ export class SceneCollectionsService extends Service implements ISceneCollection
    */
   private async readCollectionDataAndLoadIntoApplicationState(id: string): Promise<void> {
     const exists = await this.stateService.collectionFileExists(id);
+
+    // necessary for validating a dual output scene collection
+    this.dualOutputService.setIsLoading(true);
 
     if (exists) {
       let data: string;
@@ -522,21 +592,27 @@ export class SceneCollectionsService extends Service implements ISceneCollection
   private async loadDataIntoApplicationState(data: string) {
     const root: RootNode = parse(data, NODE_TYPES);
 
-    // TODO: This is an edge case now that scene collections are segmented by OS
-    // Ideally we don't ever hit this.
-    if (!root.data.sources.isAllSupported()) {
-      const backupName = `${this.activeCollection?.name} - Backup`;
-
-      await this.duplicate(backupName);
-      await electron.remote.dialog.showMessageBox(Utils.getMainWindow(), {
+    // Since scene collections are already segmented by OS,
+    // the source code below which restored collections was
+    // triggered by incorrect reasons and its result confused users.
+    // Instead of that, now we will just remove unsuppported sources here.
+    if (root.data.sources.removeUnsupported()) {
+      // The underlying function already wrote all details to the log.
+      // Users will see a very basic information.
+      await remote.dialog.showMessageBox(Utils.getMainWindow(), {
         title: 'Unsupported Sources',
         type: 'warning',
-        message: `The scene collection you are loading has sources that are not supported by your current operating system. These sources will be removed before loading the scene collection. A backup of this collection with the original sources preserved has been created with the name: ${backupName}`,
+        message: 'One or more scene items were removed because they are not supported',
       });
     }
 
     await root.load();
     this.hotkeysService.bindHotkeys();
+
+    // Users who selected a theme during onboarding should skip adding default sources
+    if (this.newUserFirstLogin) {
+      this.newUserFirstLogin = false;
+    }
   }
 
   /**
@@ -634,14 +710,14 @@ export class SceneCollectionsService extends Service implements ISceneCollection
   /**
    * Creates the default audio sources
    */
-  private setupDefaultAudio() {
+  private setupDefaultAudio(desktopAudioDevice?: string, micDevice?: string) {
     // On macOS, most users will not have an audio capture device, so
     // we do not create it automatically.
     if (getOS() === OS.Windows) {
       this.sourcesService.createSource(
         'Desktop Audio',
         byOS({ [OS.Windows]: 'wasapi_output_capture', [OS.Mac]: 'coreaudio_output_capture' }),
-        {},
+        { device_id: desktopAudioDevice },
         { channel: E_AUDIO_CHANNELS.OUTPUT_1 },
       );
     }
@@ -652,7 +728,7 @@ export class SceneCollectionsService extends Service implements ISceneCollection
     this.sourcesService.createSource(
       'Mic/Aux',
       byOS({ [OS.Windows]: 'wasapi_input_capture', [OS.Mac]: 'coreaudio_input_capture' }),
-      { device_id: defaultId },
+      { device_id: micDevice || defaultId },
       { channel: E_AUDIO_CHANNELS.INPUT_1 },
     );
   }
@@ -680,7 +756,15 @@ export class SceneCollectionsService extends Service implements ISceneCollection
    * Deletes on the server and removes from the store
    */
   private async removeCollection(id: string) {
-    this.collectionRemoved.next(this.collections.find(coll => coll.id === id));
+    this.collectionRemoved.next(
+      this.collections.find(coll => {
+        const skip = coll?.sceneNodeMaps && Object.values(coll?.sceneNodeMaps).length > 0;
+
+        if (coll.id === id && !skip) {
+          return coll;
+        }
+      }),
+    );
     this.stateService.DELETE_COLLECTION(id);
     await this.safeSync();
 
@@ -720,6 +804,7 @@ export class SceneCollectionsService extends Service implements ISceneCollection
           .makeSceneCollectionActive(collection.serverId)
           .catch(e => console.warn('Failed setting active collection'));
       }
+
       this.stateService.SET_ACTIVE_COLLECTION(id);
     }
   }
@@ -750,7 +835,21 @@ export class SceneCollectionsService extends Service implements ISceneCollection
 
     const serverCollections = (await this.serverApi.fetchSceneCollections()).data;
 
+    // A user who has never logged in before and did not install a
+    // theme during onboarding will have no collections. To prevent
+    // special handling of the default theme for a user who installed
+    // a theme during onboarding. NOTE: this will be set to false after
+    // onboarding in the dual output service
+    if (!serverCollections || serverCollections.length === 0) {
+      this.newUserFirstLogin = true;
+    } else {
+      this.newUserFirstLogin = false;
+    }
+
     let failed = false;
+
+    const collectionsToInsert = [];
+    const collectionsToUpdate = [];
 
     for (const onServer of serverCollections) {
       const inManifest = this.stateService.state.collections.find(
@@ -787,60 +886,37 @@ export class SceneCollectionsService extends Service implements ISceneCollection
 
           if (!success) failed = true;
         } else if (new Date(inManifest.modified) < new Date(onServer.last_updated_at)) {
-          const success = await this.performSyncStep('Update from server', async () => {
-            const response = await this.serverApi.fetchSceneCollection(onServer.id);
-
-            if (response.scene_collection.data) {
-              this.stateService.writeDataToCollectionFile(
-                inManifest.id,
-                response.scene_collection.data,
-              );
-            } else {
-              console.error(`Server returned empty data for collection ${inManifest.id}`);
-            }
-
-            this.stateService.RENAME_COLLECTION(
-              inManifest.id,
-              onServer.name,
-              onServer.last_updated_at,
-            );
-          });
-
-          if (!success) failed = true;
+          collectionsToUpdate.push(onServer.id);
         } else {
           console.log('Up to date file: ', inManifest.id);
         }
       } else {
-        const success = await this.performSyncStep('Insert from server', async () => {
-          const id: string = uuid();
-          const response = await this.serverApi.fetchSceneCollection(onServer.id);
-
-          let operatingSystem = getOS();
-
-          // Empty data means that the collection was created from the Streamlabs
-          // dashboard and does not currently have any scenes assoicated with it.
-          // The first time we try to load this collection, we will initialize it
-          // with some scenes.
-
-          if (response.scene_collection.data != null) {
-            this.stateService.writeDataToCollectionFile(id, response.scene_collection.data);
-
-            // Attempt to pull the OS out of the data, assuming Windows if it is not marked
-            operatingSystem =
-              JSON.parse(response.scene_collection.data).operatingSystem || OS.Windows;
-          }
-
-          this.stateService.ADD_COLLECTION(
-            id,
-            onServer.name,
-            onServer.last_updated_at,
-            operatingSystem,
-          );
-          this.stateService.SET_SERVER_ID(id, onServer.id);
-        });
-
-        if (!success) failed = true;
+        collectionsToInsert.push(onServer.id);
       }
+    }
+
+    if (collectionsToUpdate.length > 0) {
+      const serverCollectionsToUpdate = await this.serverApi.fetchSceneCollectionsById(
+        collectionsToUpdate,
+      );
+
+      const success = await this.performSyncStep('Update from Server', async () => {
+        this.updateCollectionsFromServer(serverCollectionsToUpdate.scene_collections);
+      });
+
+      if (!success) failed = true;
+    }
+
+    if (collectionsToInsert.length > 0) {
+      const serverCollectionsToInsert = await this.serverApi.fetchSceneCollectionsById(
+        collectionsToInsert,
+      );
+
+      const success = await this.performSyncStep('Insert from Server', async () => {
+        this.insertCollectionsFromServer(serverCollectionsToInsert.scene_collections);
+      });
+
+      if (!success) failed = true;
     }
 
     for (const inManifest of this.stateService.state.collections) {
@@ -890,6 +966,54 @@ export class SceneCollectionsService extends Service implements ISceneCollection
     if (failed) throw new Error('Sync failed!');
   }
 
+  updateCollectionsFromServer(collections: IServerSceneCollection[]) {
+    collections.forEach(collection => {
+      const inManifest = this.stateService.state.collections.find(
+        coll => coll.serverId === collection.id,
+      );
+      if (!inManifest) return console.error('Scene Collection not found');
+      if (collection.data) {
+        this.stateService.writeDataToCollectionFile(inManifest.id, collection.data);
+      } else {
+        console.error(`Server returned empty data for collection ${inManifest.id}`);
+      }
+
+      this.stateService.RENAME_COLLECTION(
+        inManifest.id,
+        collection.name,
+        collection.last_updated_at,
+      );
+    });
+  }
+
+  insertCollectionsFromServer(collections: IServerSceneCollection[]) {
+    collections.forEach(collection => {
+      const id: string = uuid();
+
+      let operatingSystem = getOS();
+
+      // Empty data means that the collection was created from the Streamlabs
+      // dashboard and does not currently have any scenes assoicated with it.
+      // The first time we try to load this collection, we will initialize it
+      // with some scenes.
+
+      if (collection.data != null) {
+        this.stateService.writeDataToCollectionFile(id, collection.data);
+
+        // Attempt to pull the OS out of the data, assuming Windows if it is not marked
+        operatingSystem = JSON.parse(collection.data).operatingSystem || OS.Windows;
+      }
+
+      this.stateService.ADD_COLLECTION(
+        id,
+        collection.name,
+        collection.last_updated_at,
+        operatingSystem,
+      );
+      this.stateService.SET_SERVER_ID(id, collection.id);
+    });
+  }
+
   /**
    * Performs a sync step, catches any errors, and returns
    * true/false depending on whether the step succeeded
@@ -916,5 +1040,210 @@ export class SceneCollectionsService extends Service implements ISceneCollection
 
   canSync(): boolean {
     return this.userService.isLoggedIn && !this.appService.state.argv.includes('--nosync');
+  }
+
+  /**
+   * Creates default sources for new users
+   * @remark New users should be in single output mode and have a few default sources.
+   */
+  setupDefaultSources(shouldAddDefaultSources: boolean) {
+    if (!shouldAddDefaultSources) {
+      this.newUserFirstLogin = false;
+      return;
+    }
+
+    const scene =
+      this.scenesService.views.activeScene ??
+      this.scenesService.createScene('Scene', { makeActive: true });
+
+    if (!scene) {
+      console.error('Default scene not found, failed to create default sources.');
+      return;
+    }
+
+    // add game capture source
+    scene.createAndAddSource('Game Capture', 'game_capture', {}, { display: 'horizontal' });
+
+    // add webcam source
+    const type = byOS({
+      [OS.Windows]: 'dshow_input',
+      [OS.Mac]: 'av_capture_input',
+    }) as TSourceType;
+
+    const defaultSource = this.defaultHardwareService.state.defaultVideoDevice;
+
+    const webCam = defaultSource
+      ? this.sourcesService.views.getSource(defaultSource)
+      : this.sourcesService.views.sources.find(s => s?.type === type);
+
+    if (!webCam) {
+      scene.createAndAddSource('Webcam', type, { display: 'horizontal' });
+    } else {
+      scene.addSource(webCam.sourceId, { display: 'horizontal' });
+    }
+
+    // add alert box widget
+    this.widgetsService.createWidget(WidgetType.AlertBox, 'Alert Box');
+
+    this.newUserFirstLogin = false;
+  }
+
+  /**
+   * Add a scene node map
+   *
+   * @remarks
+   * For dual output scenes, save a node map in the scene collection manifest for each scene
+   * so that the horizontal and vertical nodes for dual output mode
+   * can reference each other.
+   *
+   * @param sceneNodeMap - Optional, the node map to add
+   */
+
+  initNodeMaps(sceneNodeMap?: { [sceneId: string]: Dictionary<string> }) {
+    this.videoSettingsService.validateVideoContext();
+
+    if (!this.activeCollection) return;
+
+    this.stateService.initNodeMaps(sceneNodeMap);
+  }
+
+  /**
+   * Restore a scene node map
+   *
+   * @remarks
+   * Primarily used to rollback removing a scene
+   *
+   * @param sceneId - the scene id
+   * @param nodeMap - Optional, the node map to restore
+   */
+  restoreNodeMap(sceneId: string, nodeMap?: Dictionary<string>) {
+    if (!this.activeCollection) return;
+    if (!this.activeCollection.hasOwnProperty('sceneNodeMaps')) {
+      this.activeCollection.sceneNodeMaps = {};
+    }
+
+    this.activeCollection.sceneNodeMaps = {
+      ...this.activeCollection.sceneNodeMaps,
+      [sceneId]: nodeMap ?? {},
+    };
+  }
+
+  /**
+   * Add a scene node map entry
+   *
+   * @remarks
+   * In order for dual output scenes to know which node is their pair,
+   * add an entry to the scene node map using the horizontal node id as the key
+   * and the vertical node id as the value.
+   *
+   * @param sceneId - the scene id
+   * @param horizontalNodeId - the horizontal node id, to be used as the key in the map
+   * @param verticalNodeId - the vertical node id, to be used as the value in the map
+   * @returns
+   */
+
+  createNodeMapEntry(sceneId: string, horizontalNodeId: string, verticalNodeId: string) {
+    if (!this.activeCollection) return;
+    if (!this.activeCollection.hasOwnProperty('sceneNodeMaps')) {
+      this.activeCollection.sceneNodeMaps = {};
+    }
+    if (
+      this.activeCollection.sceneNodeMaps &&
+      !this.activeCollection?.sceneNodeMaps.hasOwnProperty(sceneId)
+    ) {
+      this.activeCollection.sceneNodeMaps = {
+        ...this.activeCollection.sceneNodeMaps,
+        [sceneId]: {},
+      };
+    }
+
+    this.stateService.createNodeMapEntry(sceneId, horizontalNodeId, verticalNodeId);
+  }
+
+  /**
+   * Remove an entry from the node map.
+   *
+   * @param horizontalNodeId - The horizontal node id, used as the key to find the vertical node id
+   * @param sceneId - The scene id
+   */
+  removeNodeMapEntry(horizontalNodeId: string, sceneId: string) {
+    if (
+      !this.activeCollection ||
+      !this.activeCollection?.sceneNodeMaps ||
+      !this.activeCollection?.sceneNodeMaps.hasOwnProperty(sceneId)
+    ) {
+      return;
+    }
+
+    const nodeMap = this.activeCollection?.sceneNodeMaps[sceneId];
+    delete nodeMap[horizontalNodeId];
+
+    this.activeCollection.sceneNodeMaps[sceneId] = { ...nodeMap };
+    this.stateService.removeNodeMapEntry(horizontalNodeId, sceneId);
+  }
+
+  /**
+   * Remove the node map for a scene.
+   *
+   * @param sceneId - The scene id
+   */
+  removeNodeMap(sceneId: string) {
+    this.stateService.removeNodeMap(sceneId);
+  }
+
+  /**
+   * Convert dual output scene collection to vanilla scene collection
+   */
+  async convertToVanillaSceneCollection(assignToHorizontal?: boolean) {
+    if (!this.activeCollection?.sceneNodeMaps) return;
+
+    const allSceneIds: string[] = this.scenesService.getSceneIds();
+
+    const dualOutputSceneIds: string[] = Object.keys(this.activeCollection?.sceneNodeMaps);
+
+    // check for nodes assigned to the vertical display for all scenes
+    allSceneIds.forEach(sceneId => {
+      if (!sceneId) return;
+
+      const scene = this.scenesService.views.getScene(sceneId);
+      if (!scene) return;
+
+      const nodes: TSceneNode[] = scene.getNodes();
+      if (!nodes) return;
+
+      const isDualOutputScene: boolean = dualOutputSceneIds.includes(sceneId);
+
+      nodes.forEach(node => {
+        if (node?.display && node?.display === 'vertical') {
+          if (!assignToHorizontal) {
+            // remove node from scene
+            if (node.isFolder()) {
+              node.ungroup();
+            } else {
+              node.remove();
+            }
+
+            /**
+             * Only attempt to remove entries for node if the scene is a dual output scene.
+             * This removes the key-value pair of the horizontal and vertical node from the scene node map.
+             * Remove entries one by one to prevent possible undefined errors.
+             */
+            if (isDualOutputScene) {
+              const horizontalNodeId = this.dualOutputService.views.getHorizontalNodeId(node.id);
+              if (horizontalNodeId) this.removeNodeMapEntry(sceneId, horizontalNodeId);
+            }
+          } else {
+            node.setDisplay('horizontal');
+          }
+        }
+      });
+
+      if (isDualOutputScene) {
+        // remove entry for scene node map
+        this.stateService.removeNodeMap(sceneId);
+      }
+    });
+
+    await this.save();
   }
 }

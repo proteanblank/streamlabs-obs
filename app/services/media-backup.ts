@@ -137,7 +137,7 @@ export class MediaBackupService extends StatefulService<IMediaBackupState> {
     try {
       data = await this.withRetry(() => this.uploadFile(file));
     } catch (e: unknown) {
-      console.error('[Media Backup] Error uploading file:', e);
+      console.error('[Media Backup] Error uploading file:', JSON.stringify(e));
 
       // We don't surface errors to the user currently
       if (this.validateSyncLock(localId, syncLock)) {
@@ -319,13 +319,13 @@ export class MediaBackupService extends StatefulService<IMediaBackupState> {
     return { Authorization: `Bearer ${this.userService.apiToken}` };
   }
 
-  private ensureMediaDirectory() {
+  ensureMediaDirectory() {
     if (!fs.existsSync(this.mediaDirectory)) {
       fs.mkdirSync(this.mediaDirectory);
     }
   }
 
-  private get mediaDirectory() {
+  get mediaDirectory() {
     return path.join(this.appService.appDataDirectory, 'Media');
   }
 

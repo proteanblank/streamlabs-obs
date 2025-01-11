@@ -25,7 +25,7 @@ module.exports = async (basePath: string) => {
   const cdnBase = `https://slobs-cdn.streamlabs.com/${process.env.SLOBS_VERSION}${
     process.platform === 'darwin' ? '-mac' : ''
   }/bundles/`;
-  const localBase = `file://${basePath}/bundles/`;
+  const localBase = path.join(basePath, 'bundles');
   const bundlesBaseDirectory = path.join(electron.app.getPath('userData'), 'bundles');
   const bundleDirectory = path.join(bundlesBaseDirectory, process.env.SLOBS_VERSION!);
 
@@ -299,6 +299,11 @@ module.exports = async (basePath: string) => {
     useLocalBundles = true;
   }
 
+  const forceLocalBundles = path.join(basePath, '../../force-local-bundles');
+  if (fs.existsSync(forceLocalBundles)) {
+    useLocalBundles = true;
+  }
+
   const localManifest: IManifest = require(path.join(`${basePath}/bundles/manifest.json`));
 
   console.log('Local bundle info:', localManifest);
@@ -405,23 +410,18 @@ module.exports = async (basePath: string) => {
     e.returnValue = bundleNames;
   });
 
-  electron.session.defaultSession?.webRequest.onBeforeRequest(
-    { urls: ['https://slobs-cdn.streamlabs.com/bundles/*.js'] },
-    (request, cb) => {
-      const bundleName = request.url.split('/')[4] as TBundleName;
+  electron.session.defaultSession?.protocol.registerFileProtocol('slbundle', (request, cb) => {
+    const url = new URL(request.url);
+    const bundleName = url.pathname.replace('/', '') as TBundleName;
 
-      if (!useLocalBundles && bundlePathsMap[bundleName]) {
-        // Work around an extreme edge case where people have # in home directory path
-        const sanitizedBundleUrl = `file://${bundlePathsMap[bundleName]}`.replace('#', '%23');
+    if (!useLocalBundles && bundlePathsMap[bundleName]) {
+      cb({ path: bundlePathsMap[bundleName] });
+      return;
+    }
 
-        cb({ redirectURL: sanitizedBundleUrl });
-        return;
-      }
-
-      console.log(`Using local bundle for ${bundleName}`);
-      cb({ redirectURL: `${localBase}${localManifest[bundleName]}` });
-    },
-  );
+    console.log(`Using local bundle for ${bundleName}`);
+    cb({ path: path.join(localBase, localManifest[bundleName]) });
+  });
 
   // Use a local web server to serve source maps in development.
   // This is needed because chromium no longer uses the redirect
@@ -483,7 +483,7 @@ module.exports = async (basePath: string) => {
     electron.BrowserWindow.getAllWindows().forEach(w => {
       if (!w.isDestroyed()) {
         console.log('Force closing window', w.id);
-        w.destroy();
+        // w.destroy();
       }
     });
 

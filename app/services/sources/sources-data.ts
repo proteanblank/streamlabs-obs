@@ -27,7 +27,7 @@ export const SourceDisplayData = (): { [key: string]: ISourceDisplayData } => ({
     icon: 'icon-image',
   },
   color_source: {
-    name: $t('Color Source'),
+    name: $t('Color Block'),
     description: $t('Add a color to the background of your whole scene or just a part.'),
     demoFilename: 'color-source.png',
     supportList: colorSupport,
@@ -43,7 +43,7 @@ export const SourceDisplayData = (): { [key: string]: ISourceDisplayData } => ({
     icon: 'fas fa-globe',
   },
   ffmpeg_source: {
-    name: $t('Media Source'),
+    name: $t('Media File'),
     description: $t('Add videos or sound clips to your scene.'),
     demoFilename: 'media.png',
     supportList: mediaSupport,
@@ -76,7 +76,8 @@ export const SourceDisplayData = (): { [key: string]: ISourceDisplayData } => ({
     description: $t("Capture a specific window that's open on your computer."),
     demoFilename: 'window-capture.png',
     supportList: [$t('Compatible with most modern browsers and programs')],
-    icon: 'fas fa-file',
+    icon: 'icon-editor-9',
+    shortDesc: $t('Capture an application window'),
   },
   game_capture: {
     name: $t('Game Capture'),
@@ -124,6 +125,14 @@ export const SourceDisplayData = (): { [key: string]: ISourceDisplayData } => ({
     icon: 'icon-group',
     shortDesc: $t('Capture games and apps'),
   },
+  mac_screen_capture: {
+    name: $t('macOS Screen Capture'),
+    description: $t('Capture your game, other applications, or your entire monitor'),
+    demoFilename: 'window-capture.png',
+    supportList: [$t('Most games, apps, displays')],
+    icon: 'icon-group',
+    shortDesc: $t('Capture games and apps'),
+  },
   liv_capture: {
     name: $t('LIV Client Capture'),
     description: $t(
@@ -157,10 +166,11 @@ export const SourceDisplayData = (): { [key: string]: ISourceDisplayData } => ({
     demoFilename: 'scene.png',
     icon: 'far fa-object-group',
   },
-  // vvv Not sure if this is still supported, there is no showcase data for it vvv
   text_ft2_source: {
     name: $t('Text (FreeType 2)'),
-    description: '',
+    description: $t('Add text to your scene and adjust its style.'),
+    demoFilename: 'text.png',
+    supportList: [...colorSupport, $t('System Fonts'), $t('System Sizes')],
     icon: 'fas fa-font',
   },
   ovrstream_dc_source: {
@@ -171,7 +181,7 @@ export const SourceDisplayData = (): { [key: string]: ISourceDisplayData } => ({
   vlc_source: {
     name: $t('VLC Source'),
     description: $t('Add playlists of videos to your scene.'),
-    icon: 'fas fa-file',
+    icon: 'fas fa-play',
   },
   coreaudio_input_capture: {
     name: $t('Audio Input Capture'),
@@ -180,7 +190,7 @@ export const SourceDisplayData = (): { [key: string]: ISourceDisplayData } => ({
     ),
     demoFilename: 'audio-input.png',
     supportList: [$t('Built in microphones'), $t('USB microphones'), $t('Other USB devices')],
-    icon: 'fas fa-file',
+    icon: 'icon-mic',
   },
   coreaudio_output_capture: {
     name: $t('Audio Output Capture'),
@@ -189,7 +199,7 @@ export const SourceDisplayData = (): { [key: string]: ISourceDisplayData } => ({
     ),
     demoFilename: 'audio-output.png',
     supportList: [$t('Desktop audio')],
-    icon: 'fas fa-file',
+    icon: 'icon-audio',
   },
   av_capture_input: {
     name: $t('Video Capture Device'),
@@ -200,7 +210,7 @@ export const SourceDisplayData = (): { [key: string]: ISourceDisplayData } => ({
       $t('Logitech webcam'),
       $t('Capture cards (Elgato, Avermedia, BlackMagic)'),
     ],
-    icon: 'fas fa-file',
+    icon: 'icon-webcam',
   },
   display_capture: {
     name: $t('Display Capture'),
@@ -214,7 +224,7 @@ export const SourceDisplayData = (): { [key: string]: ISourceDisplayData } => ({
     description: $t("Capture a game you're playing on your computer."),
     demoFilename: 'game-capture.png',
     supportList: [$t('Built in works with most modern computer games')],
-    icon: 'fas fa-file',
+    icon: 'fas fa-gamepad',
   },
   audio_line: {
     name: $t('JACK Input Client'),
@@ -232,7 +242,7 @@ export const SourceDisplayData = (): { [key: string]: ISourceDisplayData } => ({
     name: $t('Instant Replay'),
     description: $t('Automatically plays your most recently captured replay in your stream.'),
     demoFilename: 'media.png',
-    icon: 'fas fa-file',
+    icon: 'icon-replay-buffer',
   },
   icon_library: {
     name: $t('Custom Icon'),
@@ -257,6 +267,30 @@ export const SourceDisplayData = (): { [key: string]: ISourceDisplayData } => ({
       $t('Many more'),
     ],
     icon: 'fas fa-file',
-    shortDesc: 'Viewer shoutouts',
+    shortDesc: $t('Viewer shoutouts'),
+  },
+  mediasoupconnector: {
+    name: $t('Collab Cam'),
+    description: $t(
+      'Invite guests to join your stream from a web browser or their Streamlabs Desktop. Stream games or IRL broadcasts together, use as additional camera angles and more.',
+    ),
+    demoFilename: 'source-collab-cam.png',
+    icon: 'icon-team-2',
+  },
+  wasapi_process_output_capture: {
+    name: $t('Application Audio Capture (BETA)'),
+    description: $t('Capture the audio coming from a specific application.'),
+    icon: 'fas fa-user',
+  },
+  spout_capture: {
+    name: $t('Spout2 capture (Vtube support)'),
+    description: $t(
+      'Virtual avatar capture source. Enables high resolution, zero-compression and zero-latency video capture from VTube third-party software.',
+    ),
+    demoFilename: 'source-spout2-thumbnail.gif',
+    supportList: ['VSeeFace', 'VTube Studio'],
+    icon: 'icon-face-masks-3',
+    link: 'https://streamlabs.com/content-hub/post/vtuber-support-on-streamlabs-desktop',
+    linkText: $t('Learn how to set it up'),
   },
 });

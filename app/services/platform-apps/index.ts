@@ -1,13 +1,12 @@
-import electron from 'electron';
 import { mutation, StatefulService, ViewHandler } from 'services/core/stateful-service';
 import { lazyModule } from 'util/lazy-module';
 import path from 'path';
 import fs from 'fs';
 import { Subject } from 'rxjs';
-import { WindowsService } from 'services/windows';
+import { IWindowOptions, WindowsService } from 'services/windows';
 import { Inject } from 'services/core/injector';
 import { EApiPermissions } from './api/modules/module';
-import { VideoService } from 'services/video';
+import { VideoSettingsService } from 'services/settings-v2/video';
 import { DevServer } from './dev-server';
 import { HostsService } from 'services/hosts';
 import { authorizedHeaders, handleResponse, jfetch } from 'util/requests';
@@ -17,6 +16,8 @@ import without from 'lodash/without';
 import { PlatformContainerManager, getPageUrl, getAssetUrl } from './container-manager';
 import { NavigationService } from 'services/navigation';
 import { InitAfter } from '../core';
+import * as remote from '@electron/remote';
+import { SideNavService } from 'app-services';
 
 const DEV_PORT = 8081;
 
@@ -70,6 +71,11 @@ export enum EAppPageSlot {
    * The background slot is never mounted anywhere
    */
   Background = 'background',
+
+  /**
+   * Auxillary slot for functionality handled in a different window
+   */
+  PopOut = 'pop_out',
 }
 
 interface IAppPage {
@@ -105,6 +111,7 @@ interface IProductionAppResponse {
   is_beta: boolean;
   manifest: IAppManifest;
   name: string;
+  delisted?: boolean;
   screenshots: string[];
   version: string;
 }
@@ -120,6 +127,7 @@ export interface ILoadedApp {
   appUrl?: string;
   devPort?: number;
   enabled: boolean;
+  delisted?: boolean;
   icon?: string;
 }
 
@@ -149,15 +157,24 @@ class PlatformAppsViews extends ViewHandler<IPlatformAppServiceState> {
   get enabledApps() {
     return this.state.loadedApps.filter(app => app.enabled);
   }
+
+  get productionApps() {
+    return this.state.loadedApps.filter(app => !app.unpacked);
+  }
+
+  getDelisted(appId: string) {
+    return this.getApp(appId).delisted;
+  }
 }
 
 @InitAfter('UserService')
 export class PlatformAppsService extends StatefulService<IPlatformAppServiceState> {
   @Inject() windowsService: WindowsService;
-  @Inject() videoService: VideoService;
+  @Inject() videoSettingsService: VideoSettingsService;
   @Inject() hostsService: HostsService;
   @Inject() userService: UserService;
   @Inject() navigationService: NavigationService;
+  @Inject() sideNavService: SideNavService;
 
   get views() {
     return new PlatformAppsViews(this.state);
@@ -171,6 +188,7 @@ export class PlatformAppsService extends StatefulService<IPlatformAppServiceStat
 
   appLoad = new Subject<ILoadedApp>();
   appUnload = new Subject<string>();
+  allAppsLoaded = new Subject<ILoadedApp[]>();
 
   /**
    * Signals all listening app sources that the provided
@@ -198,6 +216,8 @@ export class PlatformAppsService extends StatefulService<IPlatformAppServiceStat
           this.loadUnpackedApp(data.appPath, data.appToken);
         }
       }
+
+      this.allAppsLoaded.next(this.state.loadedApps);
     });
 
     this.userService.userLogout.subscribe(() => {
@@ -246,6 +266,7 @@ export class PlatformAppsService extends StatefulService<IPlatformAppServiceStat
         appToken: app.app_token,
         poppedOutSlots: [],
         icon: app.icon,
+        delisted: app.delisted,
         enabled: !(unpackedVersionLoaded || disabledApps.includes(app.id_hash)),
       });
     });
@@ -261,6 +282,16 @@ export class PlatformAppsService extends StatefulService<IPlatformAppServiceStat
     return jfetch<{ is_app_store_visible: boolean }>(request)
       .then(json => json.is_app_store_visible)
       .catch(() => false);
+  }
+
+  /**
+   * Refresh production apps list
+   */
+
+  async refreshProductionApps() {
+    this.unloadAllApps();
+    this.loadProductionApps();
+    this.sideNavService.actions.updateAllApps(this.state.loadedApps);
   }
 
   /**
@@ -570,8 +601,8 @@ export class PlatformAppsService extends StatefulService<IPlatformAppServiceStat
       }
       if (source.initialSize.type === ESourceSizeType.Relative) {
         return {
-          width: source.initialSize.width * this.videoService.baseWidth,
-          height: source.initialSize.height * this.videoService.baseHeight,
+          width: source.initialSize.width * this.videoSettingsService.baseWidth,
+          height: source.initialSize.height * this.videoSettingsService.baseHeight,
         };
       }
     }
@@ -596,12 +627,12 @@ export class PlatformAppsService extends StatefulService<IPlatformAppServiceStat
     return this.state.loadedApps.filter(app => !app.unpacked);
   }
 
-  popOutAppPage(appId: string, pageSlot: EAppPageSlot) {
+  popOutAppPage(appId: string, pageSlot: EAppPageSlot, windowOptions?: Partial<IWindowOptions>) {
     const app = this.views.getApp(appId);
     if (!app || !app.enabled) return;
 
     const windowId = `${appId}-${pageSlot}`;
-    const mousePos = electron.remote.screen.getCursorScreenPoint();
+    const mousePos = remote.screen.getCursorScreenPoint();
 
     // We use a generated window Id to prevent someobody popping out the
     // same winow multiple times.
@@ -613,6 +644,7 @@ export class PlatformAppsService extends StatefulService<IPlatformAppServiceStat
         size: this.getPagePopOutSize(appId, pageSlot),
         x: mousePos.x,
         y: mousePos.y,
+        ...windowOptions,
       },
       windowId,
     );

@@ -1,53 +1,46 @@
 import Vue from 'vue';
 import { Component, Watch } from 'vue-property-decorator';
-import SideNav from '../SideNav';
 import {
-  NewsBanner,
   TitleBar,
   Grow,
   PatchNotes,
   Loader,
   StreamScheduler,
+  StudioFooter,
   Highlighter,
   ThemeAudit,
+  LayoutEditor,
+  Onboarding,
+  SideNav,
+  PlatformMerge,
+  AlertboxLibrary,
+  PlatformAppStore,
+  BrowseOverlays,
+  PlatformAppMainPage,
+  RecordingHistory,
+  Studio,
+  LiveDock,
 } from 'components/shared/ReactComponentList';
 import { ScenesService } from 'services/scenes';
 import { PlatformAppsService } from 'services/platform-apps';
-import { EditorCommandsService } from '../../app-services';
+import { EditorCommandsService, PerformanceService } from '../../app-services';
 import VueResize from 'vue-resize';
 import { $t } from 'services/i18n';
 import fs from 'fs';
+import * as remote from '@electron/remote';
 Vue.use(VueResize);
 
 // Pages
-import Studio from '../pages/Studio';
-import PlatformAppStore from '../pages/PlatformAppStore.vue';
-import BrowseOverlays from 'components/pages/BrowseOverlays.vue';
-import AlertboxLibrary from 'components/pages/AlertboxLibrary';
-import Onboarding from '../pages/Onboarding';
-import LayoutEditor from '../pages/LayoutEditor';
 import { Inject } from '../../services/core/injector';
-import { CustomizationService } from 'services/customization';
+import { CustomizationService, CustomizationState } from 'services/customization';
 import { NavigationService } from 'services/navigation';
 import { AppService } from 'services/app';
 import { UserService } from 'services/user';
 import { IModalOptions, WindowsService } from 'services/windows';
-import LiveDock from '../LiveDock.vue';
-import StudioFooter from '../StudioFooter.vue';
-import PlatformAppMainPage from '../pages/PlatformAppMainPage.vue';
-import electron from 'electron';
 import ResizeBar from 'components/shared/ResizeBar.vue';
-import PlatformMerge from 'components/pages/PlatformMerge';
 import { getPlatformService } from 'services/platforms';
 import ModalWrapper from '../shared/modals/ModalWrapper';
 import antdThemes from 'styles/antd/index';
-
-const loadedTheme = () => {
-  const customizationState = localStorage.getItem('PersistentStatefulService-CustomizationService');
-  if (customizationState) {
-    return JSON.parse(customizationState)?.theme;
-  }
-};
 
 @Component({
   components: {
@@ -60,7 +53,6 @@ const loadedTheme = () => {
     StudioFooter,
     CustomLoader: Loader,
     PatchNotes,
-    NewsBanner,
     PlatformAppMainPage,
     PlatformAppStore,
     ResizeBar,
@@ -68,6 +60,7 @@ const loadedTheme = () => {
     LayoutEditor,
     AlertboxLibrary,
     ModalWrapper,
+    RecordingHistory,
     StreamScheduler,
     Highlighter,
     Grow,
@@ -83,6 +76,7 @@ export default class Main extends Vue {
   @Inject() scenesService: ScenesService;
   @Inject() platformAppsService: PlatformAppsService;
   @Inject() editorCommandsService: EditorCommandsService;
+  @Inject() performanceService: PerformanceService;
 
   private modalOptions: IModalOptions = {
     renderFn: null,
@@ -92,7 +86,16 @@ export default class Main extends Vue {
     window.addEventListener('resize', this.windowSizeHandler);
   }
 
+  unbind: () => void;
+
   mounted() {
+    this.unbind = this.customizationService.state.bindProps(this, {
+      theme: 'theme',
+      isDockCollapsed: 'livedockCollapsed',
+      leftDock: 'leftDock',
+      liveDockSize: 'livedockSize',
+    });
+
     antdThemes[this.theme].use();
     WindowsService.modalChanged.subscribe(modalOptions => {
       this.modalOptions = { ...this.modalOptions, ...modalOptions };
@@ -124,6 +127,7 @@ export default class Main extends Vue {
 
   destroyed() {
     window.removeEventListener('resize', this.windowSizeHandler);
+    this.unbind();
   }
 
   minEditorWidth = 500;
@@ -140,13 +144,7 @@ export default class Main extends Vue {
     return this.navigationService.state.params;
   }
 
-  get theme() {
-    if (this.$store.state.bulkLoadFinished) {
-      return this.customizationService.currentTheme;
-    }
-
-    return loadedTheme() || 'night-theme';
-  }
+  theme = 'night-theme';
 
   get applicationLoading() {
     return this.appService.state.loading;
@@ -172,17 +170,9 @@ export default class Main extends Vue {
     );
   }
 
-  get liveDockSize() {
-    return this.customizationService.state.livedockSize;
-  }
-
-  get isDockCollapsed() {
-    return this.customizationService.state.livedockCollapsed;
-  }
-
-  get leftDock() {
-    return this.customizationService.state.leftDock;
-  }
+  liveDockSize = 0;
+  isDockCollapsed = true;
+  leftDock = false;
 
   get isOnboarding() {
     return this.navigationService.state.currentPage === 'Onboarding';
@@ -224,8 +214,8 @@ export default class Main extends Vue {
     });
 
     if (files.length > 1 || isDirectory) {
-      electron.remote.dialog
-        .showMessageBox(electron.remote.getCurrentWindow(), {
+      remote.dialog
+        .showMessageBox(remote.getCurrentWindow(), {
           title: 'Streamlabs Desktop',
           message: $t('Are you sure you want to import multiple files?'),
           type: 'warning',
@@ -241,7 +231,7 @@ export default class Main extends Vue {
   }
 
   executeFileDrop(files: string[]) {
-    this.editorCommandsService.executeCommand(
+    this.editorCommandsService.actions.executeCommand(
       'AddFilesCommand',
       this.scenesService.views.activeSceneId,
       files,

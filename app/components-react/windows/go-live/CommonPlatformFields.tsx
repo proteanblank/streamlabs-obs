@@ -1,12 +1,14 @@
 import { TPlatform } from '../../../services/platforms';
 import { $t } from '../../../services/i18n';
-import React from 'react';
+import React, { useMemo } from 'react';
 import { CheckboxInput, InputComponent, TextAreaInput, TextInput } from '../../shared/inputs';
 import { assertIsDefined } from '../../../util/properties-type-guards';
 import InputWrapper from '../../shared/inputs/InputWrapper';
 import Animate from 'rc-animate';
 import { TLayoutMode } from './platforms/PlatformSettingsLayout';
 import { Services } from '../../service-provider';
+import AiHighlighterToggle from './AiHighlighterToggle';
+import { EAvailableFeatures } from 'services/incremental-rollout';
 
 interface ICommonPlatformSettings {
   title: string;
@@ -22,6 +24,7 @@ interface IProps {
   layoutMode?: TLayoutMode;
   value: ICommonPlatformSettings;
   descriptionIsRequired?: boolean;
+  enabledPlatforms?: TPlatform[];
   onChange: (newValue: ICommonPlatformSettings) => unknown;
 }
 
@@ -55,12 +58,17 @@ export const CommonPlatformFields = InputComponent((rawProps: IProps) => {
   }
 
   const view = Services.StreamingService.views;
+  const aiHighlighterEnabled = Services.IncrementalRolloutService.views.featureIsEnabled(
+    EAvailableFeatures.aiHighlighter,
+  );
   const hasCustomCheckbox = p.layoutMode === 'multiplatformAdvanced';
   const fieldsAreVisible = !hasCustomCheckbox || p.value.useCustomFields;
   const descriptionIsRequired =
     typeof p.descriptionIsRequired === 'boolean'
       ? p.descriptionIsRequired
       : p.platform === 'facebook';
+
+  const user = Services.UserService.views;
 
   const hasDescription = p.platform
     ? view.supports('description', [p.platform as TPlatform])
@@ -72,6 +80,27 @@ export const CommonPlatformFields = InputComponent((rawProps: IProps) => {
   const title = hasDescription
     ? $t('Use different title and description')
     : $t('Use different title');
+
+  // determine max character length for title by enabled platform limitation
+  let maxCharacters = 120;
+  const enabledPlatforms = view.enabledPlatforms;
+  if (enabledPlatforms.includes('youtube')) {
+    maxCharacters = 100;
+  } else if (enabledPlatforms.includes('twitch')) {
+    maxCharacters = 140;
+  }
+
+  const titleTooltip = useMemo(() => {
+    if (enabledPlatforms.includes('tiktok')) {
+      return $t('Only 32 characters of your title will display on TikTok');
+    }
+
+    if (enabledPlatforms.length === 1 && p?.platform === 'kick') {
+      return $t('Edit your stream title on Kick after going live.');
+    }
+
+    return undefined;
+  }, [enabledPlatforms]);
 
   return (
     <div>
@@ -97,7 +126,8 @@ export const CommonPlatformFields = InputComponent((rawProps: IProps) => {
               onChange={val => updateCommonField('title', val)}
               label={$t('Title')}
               required={true}
-              max={p.platform === 'twitch' ? 140 : 120}
+              max={maxCharacters}
+              tooltip={titleTooltip}
             />
 
             {/*DESCRIPTION*/}
@@ -109,6 +139,10 @@ export const CommonPlatformFields = InputComponent((rawProps: IProps) => {
                 label={$t('Description')}
                 required={descriptionIsRequired}
               />
+            )}
+
+            {aiHighlighterEnabled && enabledPlatforms && !enabledPlatforms.includes('twitch') && (
+              <AiHighlighterToggle game={undefined} cardIsExpanded={false} />
             )}
           </div>
         )}

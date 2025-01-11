@@ -3,7 +3,9 @@ import { TPlatform } from '../../../../services/platforms';
 import { ITwitchStartStreamOptions } from '../../../../services/platforms/twitch';
 import { IYoutubeStartStreamOptions } from '../../../../services/platforms/youtube';
 import { IFacebookStartStreamOptions } from '../../../../services/platforms/facebook';
-import { ITiktokStartStreamOptions } from '../../../../services/platforms/tiktok';
+import { ITikTokStartStreamOptions } from '../../../../services/platforms/tiktok';
+import { ITrovoStartStreamOptions } from '../../../../services/platforms/trovo';
+import { IKickStartStreamOptions } from '../../../../services/platforms/kick';
 
 export type TLayoutMode = 'singlePlatform' | 'multiplatformAdvanced' | 'multiplatformSimple';
 
@@ -33,7 +35,9 @@ export interface IPlatformSettings extends Partial<Record<TPlatform, any>> {
   twitch?: ITwitchStartStreamOptions;
   youtube?: IYoutubeStartStreamOptions;
   facebook?: IFacebookStartStreamOptions;
-  tiktok?: ITiktokStartStreamOptions;
+  tiktok?: ITikTokStartStreamOptions;
+  trovo?: ITrovoStartStreamOptions;
+  kick?: IKickStartStreamOptions;
 }
 
 export interface IPlatformComponentParams<T extends TPlatform> {

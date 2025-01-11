@@ -5,7 +5,6 @@
       :class="{ 'titlebar--error': errorAlert }"
       v-if="uiReady"
     />
-    <news-banner v-if="uiReady" />
     <div
       class="main-contents"
       v-if="uiReady"
@@ -15,9 +14,13 @@
         'main-contents--onboarding': page === 'Onboarding',
       }"
     >
-      <side-nav v-if="page !== 'Onboarding' && !showLoadingSpinner" :locked="applicationLoading" />
+      <side-nav
+        v-if="page !== 'Onboarding' && !showLoadingSpinner"
+        :locked="applicationLoading"
+        class="sidenav"
+      />
       <div class="live-dock-wrapper" v-if="renderDock && leftDock">
-        <live-dock :onLeft="true" />
+        <live-dock :component-props="{ onLeft: true }" />
         <resize-bar
           v-if="!isDockCollapsed"
           class="live-dock-resize-bar live-dock-resize-bar--left"
@@ -37,13 +40,11 @@
           v-if="!showLoadingSpinner"
           :is="page"
           :params="params"
+          :component-props="{ onTotalWidth: width => handleEditorWidth(width), params }"
           @totalWidth="width => handleEditorWidth(width)"
           style="grid-row: 1 / span 1"
         />
-        <studio-footer
-          v-if="!applicationLoading && page !== 'Onboarding'"
-          style="grid-row: 2 / span 1"
-        />
+        <studio-footer v-if="!applicationLoading && page !== 'Onboarding'" />
       </div>
 
       <div class="live-dock-wrapper" v-if="renderDock && !leftDock">
@@ -63,7 +64,11 @@
     </div>
     <ModalWrapper :renderFn="modalOptions.renderFn" />
     <transition name="loader">
-      <div class="main-loading" v-if="!uiReady || showLoadingSpinner">
+      <div
+        class="main-loading"
+        :class="{ 'initial-loading': !uiReady }"
+        v-if="!uiReady || showLoadingSpinner"
+      >
         <custom-loader></custom-loader>
       </div>
     </transition>
@@ -86,6 +91,13 @@
 
 <style lang="less" scoped>
 @import '../../styles/index';
+
+.sidenav {
+  min-height: 100%;
+  height: 100%;
+  display: flex;
+  flex-grow: 1;
+}
 
 .main {
   display: flex;
@@ -155,6 +167,10 @@
   /deep/ .s-loader__bg {
     top: 30px;
   }
+}
+
+.initial-loading {
+  top: 0px !important;
 }
 
 .loader-enter-active,

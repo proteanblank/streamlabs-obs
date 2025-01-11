@@ -22,17 +22,24 @@ import {
   TextInput,
   TInputLayout,
 } from '../shared/inputs';
-import { cloneDeep } from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
 import { Button } from 'antd';
 import InputWrapper from '../shared/inputs/InputWrapper';
-import { $t, $translateIfExist } from '../../services/i18n';
+import { $t, $translateIfExist, $translateIfExistWithCheck } from '../../services/i18n';
 import Utils from 'services/utils';
 
-interface IObsFormProps {
+import * as obs from '../../../obs-api';
+
+interface IExtraInputProps {
+  debounce?: number;
+}
+
+export interface IObsFormProps {
   value: IObsInput<TObsValue>[];
-  onChange: (newValue: IObsInput<TObsValue>[]) => unknown;
+  onChange: (newValue: IObsInput<TObsValue>[], changedInd: number) => unknown;
   layout?: TInputLayout;
   style?: React.CSSProperties;
+  extraProps?: Record<string, IExtraInputProps>;
 }
 
 /**
@@ -43,7 +50,7 @@ export function ObsForm(p: IObsFormProps) {
     const newValue = cloneDeep(p.value);
     newValue.splice(index, 1, value);
 
-    p.onChange(newValue);
+    p.onChange(newValue, index);
   }
 
   return (
@@ -54,6 +61,7 @@ export function ObsForm(p: IObsFormProps) {
           key={inputData.name}
           inputIndex={inputIndex}
           onChange={onInputHandler}
+          extraProps={p.extraProps?.[inputData.name]}
         />
       ))}
     </Form>
@@ -64,6 +72,7 @@ interface IObsInputProps {
   value: IObsInput<TObsValue>;
   inputIndex: number;
   onChange: (newValue: IObsInput<TObsValue>, inputInd: number) => unknown;
+  extraProps?: IExtraInputProps;
 }
 
 /**
@@ -81,12 +90,17 @@ function ObsInput(p: IObsInputProps) {
     p.onChange(newVal, p.inputIndex);
   }
 
+  const extraProps = p.extraProps || {};
+
   const inputProps = {
     value: p.value.value as any,
     onChange: onChangeHandler,
     name: p.value.name,
     label: $translateIfExist(p.value.description),
     uncontrolled: false,
+    masked: p.value.masked,
+    disabled: !p.value.enabled,
+    ...extraProps,
   };
 
   switch (type) {
@@ -103,9 +117,17 @@ function ObsInput(p: IObsInputProps) {
       const textVal = p.value as IObsTextInputValue;
 
       if (textVal.multiline) {
-        return <TextAreaInput {...inputProps} />;
+        return <TextAreaInput {...inputProps} debounce={300} />;
+      } else if (textVal.infoField) {
+        let style = { };
+        if (textVal.infoType == obs.ETextInfoType.Warning) {
+          Object.assign(style, { color: 'var(--info)' });
+        } else if (textVal.infoType == obs.ETextInfoType.Error) {
+          Object.assign(style, { color: 'var(--warning)' });
+        }
+        return <InputWrapper style={ style }>{textVal.description}</InputWrapper>;
       } else {
-        return <TextInput {...inputProps} />;
+        return <TextInput {...inputProps} isPassword={inputProps.masked} />;
       }
     case 'OBS_PROPERTY_LIST':
       // eslint-disable-next-line no-case-declarations
@@ -114,9 +136,11 @@ function ObsInput(p: IObsInputProps) {
         if (opt.value === 0 && opt.description === '') {
           return { label: $t('Select Option'), value: 0 };
         }
+
         return {
           value: opt.value,
-          label: $translateIfExist(opt.description),
+          label: $translateIfExistWithCheck(opt.description),
+          originalLabel: opt.description,
         };
       });
       return <ListInput {...inputProps} options={options} allowClear={false} />;

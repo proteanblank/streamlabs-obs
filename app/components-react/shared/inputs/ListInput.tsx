@@ -19,6 +19,8 @@ const ANT_SELECT_FEATURES = [
   'onSelect',
   'allowClear',
   'defaultActiveFirstOption',
+  'listHeight',
+  'filterOption',
 ] as const;
 
 // define custom props
@@ -28,7 +30,8 @@ export interface ICustomListProps<TValue> {
   optionRender?: (opt: IListOption<TValue>) => ReactNode;
   labelRender?: (opt: IListOption<TValue>) => ReactNode;
   onBeforeSearch?: (searchStr: string) => unknown;
-  options: IListOption<TValue>[];
+  options?: IListOption<TValue>[];
+  description?: string;
 }
 
 // define a type for the component's props
@@ -44,13 +47,19 @@ export type TListInputProps<TValue> = TSlobsInputProps<
  */
 export interface IListOption<TValue> {
   label: string;
+  /** The untranslated original label */
+  originalLabel?: string;
   value: TValue;
-  description?: string; // TODO
-  image?: string;
+  description?: string;
+  image?: string | ReactNode;
 }
 
 export const ListInput = InputComponent(<T extends any>(p: TListInputProps<T>) => {
-  const { inputAttrs, wrapperAttrs } = useInput('list', p, ANT_SELECT_FEATURES);
+  const { inputAttrs, wrapperAttrs, form } = useInput('list', p, ANT_SELECT_FEATURES);
+
+  // TODO: allow to use this component outside a Form
+  if (!form) console.error('ListInput component should be wrapped in Form');
+
   const options = p.options;
   const debouncedSearch = useDebounce(p.debounce, startSearch);
   const $inputRef = useRef<RefSelectProps>(null);
@@ -75,10 +84,10 @@ export const ListInput = InputComponent(<T extends any>(p: TListInputProps<T>) =
     return $el.closest('.os-content, body')! as HTMLElement;
   }
 
-  const selectedOption = options.find(opt => opt.value === p.value);
+  const selectedOption = options?.find(opt => opt.value === p.value);
 
   return (
-    <InputWrapper {...wrapperAttrs} extra={selectedOption?.description}>
+    <InputWrapper {...wrapperAttrs} extra={p?.description ?? selectedOption?.description}>
       <Select
         ref={$inputRef}
         {...omit(inputAttrs, 'onChange')}
@@ -88,6 +97,7 @@ export const ListInput = InputComponent(<T extends any>(p: TListInputProps<T>) =
         optionLabelProp="labelrender"
         onSearch={p.showSearch ? onSearchHandler : undefined}
         onChange={val => p.onChange && p.onChange(val as T)}
+        onSelect={p.onSelect}
         defaultValue={p.defaultValue as string}
         getPopupContainer={getPopupContainer}
         data-value={inputAttrs.value}
@@ -108,7 +118,7 @@ export function renderOption<T>(
 ) {
   const attrs = {
     'data-option-list': inputProps.name,
-    'data-option-label': opt.label,
+    'data-option-label': opt.originalLabel ?? opt.label,
     'data-option-value': opt.value,
     label: opt.label,
     value: (opt.value as unknown) as string,
@@ -152,7 +162,12 @@ function renderOptionWithImage<T>(opt: IListOption<T>, inputProps: ICustomListPr
   return (
     <Row gutter={8} align="middle" wrap={false}>
       <Col>
-        {src && <img src={src} alt="" style={imageStyle} />}
+        {src &&
+          (typeof src === 'string' ? (
+            <img src={src} alt="" style={imageStyle} />
+          ) : (
+            <div>{src}</div>
+          ))}
         {!src && <div style={imageStyle} />}
       </Col>
       <Col>{opt.label}</Col>
@@ -170,7 +185,12 @@ function renderLabelWithImage<T>(opt: IListOption<T>) {
   return (
     <Row gutter={8}>
       <Col>
-        {src && <img src={src} alt="" style={imageStyle} />}
+        {src &&
+          (typeof src === 'string' ? (
+            <img src={src} alt="" style={imageStyle} />
+          ) : (
+            <div>{src}</div>
+          ))}
         {!src && <div style={imageStyle} />}
       </Col>
       <Col>{opt.label}</Col>

@@ -8,6 +8,7 @@ import css from './ModalLayout.m.less';
 import { Button } from 'antd';
 import { ModalProps } from 'antd/lib/modal';
 import Scrollable from './Scrollable';
+import { useRealmObject } from 'components-react/hooks/realm';
 
 // use props of Modal from the antd lib
 type TProps = {
@@ -15,7 +16,9 @@ type TProps = {
   fixedChild?: ReactNode;
   hideFooter?: boolean;
   scrollable?: boolean;
-} & Pick<ModalProps, 'footer' | 'onOk' | 'okText' | 'bodyStyle' | 'confirmLoading'>;
+  wrapperStyle?: React.CSSProperties;
+  className?: string;
+} & Pick<ModalProps, 'footer' | 'onOk' | 'okText' | 'bodyStyle' | 'confirmLoading' | 'onCancel'>;
 
 // calculate OS dependent styles
 const titleHeight = getOS() === OS.Mac ? 22 : 30;
@@ -46,8 +49,7 @@ export function ModalLayout(p: TProps) {
   // inject services
   const { WindowsService, CustomizationService } = Services;
 
-  // define a vuex state
-  const v = useVuex(() => ({ currentTheme: CustomizationService.currentTheme }), false);
+  const currentTheme = useRealmObject(CustomizationService.state).theme;
 
   // define a close method for the modal
   function close() {
@@ -59,9 +61,10 @@ export function ModalLayout(p: TProps) {
   // render a default footer with action buttons
   function DefaultFooter() {
     const okText = p.okText || $t('Done');
+    const closeFunc = p.onCancel || close;
     return (
       <>
-        <Button onClick={close}>{$t('Close')}</Button>
+        <Button onClick={closeFunc}>{$t('Close')}</Button>
         {p.onOk && (
           <Button onClick={p.onOk} type="primary" disabled={p.confirmLoading}>
             {p.confirmLoading && (
@@ -75,7 +78,10 @@ export function ModalLayout(p: TProps) {
   }
 
   return (
-    <div className={cx('ant-modal-content', v.currentTheme)} style={wrapperStyles}>
+    <div
+      className={cx('ant-modal-content', currentTheme, p.className)}
+      style={{ ...wrapperStyles, ...p.wrapperStyle }}
+    >
       {p.fixedChild && <div style={fixedStyles}>{p.fixedChild}</div>}
 
       {p.scrollable ? (

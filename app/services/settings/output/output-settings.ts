@@ -1,12 +1,16 @@
 import { Service } from 'services/core/service';
 import { ISettingsSubCategory, SettingsService } from 'services/settings';
+import { VideoSettingsService } from 'services/settings-v2/video';
+import { HighlighterService } from 'services/highlighter';
 import { Inject } from 'services/core/injector';
 import { Dictionary } from 'vuex';
+import { AudioService } from 'app-services';
+import { parse } from 'path';
 
 /**
  * list of encoders for simple mode
  */
-enum EObsSimpleEncoder {
+export enum EObsSimpleEncoder {
   x264 = 'x264',
   x264_lowcpu = 'x264_lowcpu',
   nvenc = 'nvenc',
@@ -99,6 +103,7 @@ export interface IEncoderSettings {
   encoder: EEncoderFamily;
   outputResolution: string;
   bitrate: number;
+  rateControl: string;
 }
 
 export interface IReplayBufferSettings {
@@ -109,6 +114,7 @@ export interface IReplayBufferSettings {
 export interface IRecordingEncoderSettings extends IEncoderSettings {
   path: string;
   format: EFileFormat;
+  isSameAsStream: boolean;
 }
 
 export interface IStreamingEncoderSettings extends IEncoderSettings {
@@ -176,6 +182,9 @@ export function obsEncoderToEncoderFamily(
 
 export class OutputSettingsService extends Service {
   @Inject() private settingsService: SettingsService;
+  @Inject() private audioService: AudioService;
+  @Inject() private videoSettingsService: VideoSettingsService;
+  @Inject() private highlighterService: HighlighterService;
 
   /**
    * returns unified settings for the Streaming and Recording encoder
@@ -270,6 +279,9 @@ export class OutputSettingsService extends Service {
 
     const hasCustomResolution = !resolutions.includes(outputResolution);
 
+    // Will only have a value in advanced mode
+    const rateControl = this.settingsService.findSettingValue(output, 'Streaming', 'rate_control');
+
     return {
       encoder,
       preset,
@@ -278,6 +290,7 @@ export class OutputSettingsService extends Service {
       encoderOptions,
       rescaleOutput,
       hasCustomResolution,
+      rateControl,
     };
   }
 
@@ -298,9 +311,8 @@ export class OutputSettingsService extends Service {
       'RecFormat',
     ) as EFileFormat;
 
-    let encoder = obsEncoderToEncoderFamily(
-      this.settingsService.findSettingValue(output, 'Recording', 'RecEncoder'),
-    ) as EEncoderFamily;
+    const recEncoder = this.settingsService.findSettingValue(output, 'Recording', 'RecEncoder');
+    let encoder = obsEncoderToEncoderFamily(recEncoder) as EEncoderFamily;
 
     const outputResolution: string =
       this.settingsService.findSettingValue(output, 'Recording', 'RecRescaleRes') ||
@@ -309,6 +321,8 @@ export class OutputSettingsService extends Service {
     const quality = this.settingsService.findValidListValue(output, 'Recording', 'RecQuality');
 
     let bitrate: number;
+    let rateControl = this.settingsService.findSettingValue(output, 'Recording', 'Recrate_control');
+    let isSameAsStream = false;
 
     if (mode === 'Simple') {
       // convert Quality to Bitrate in the Simple mode
@@ -323,12 +337,20 @@ export class OutputSettingsService extends Service {
           bitrate = 80000;
           break;
         case 'Stream':
+          isSameAsStream = true;
           bitrate = streamingSettings.bitrate;
           encoder = streamingSettings.encoder;
           break;
       }
     } else {
-      this.settingsService.findSettingValue(output, 'Recording', 'Recbitrate');
+      if (recEncoder === 'none') {
+        isSameAsStream = true;
+        bitrate = streamingSettings.bitrate;
+        encoder = streamingSettings.encoder;
+        rateControl = streamingSettings.rateControl;
+      } else {
+        bitrate = this.settingsService.findSettingValue(output, 'Recording', 'Recbitrate');
+      }
     }
 
     return {
@@ -337,6 +359,8 @@ export class OutputSettingsService extends Service {
       encoder,
       outputResolution,
       bitrate,
+      rateControl,
+      isSameAsStream,
     };
   }
 
@@ -351,7 +375,9 @@ export class OutputSettingsService extends Service {
     const currentSettings = this.getSettings();
 
     if (settingsPatch.inputResolution) {
-      this.settingsService.setSettingValue('Video', 'Base', settingsPatch.inputResolution);
+      const [width, height] = settingsPatch.inputResolution.split('x');
+      this.videoSettingsService.setVideoSetting('baseWidth', Number(width));
+      this.videoSettingsService.setVideoSetting('baseHeight', Number(height));
     }
 
     if (settingsPatch.streaming) {

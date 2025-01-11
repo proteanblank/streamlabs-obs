@@ -1,11 +1,10 @@
 import React from 'react';
-import { useOnCreate } from '../../hooks';
+import { useOnCreate } from 'slap';
 import { ModalLayout } from '../../shared/ModalLayout';
 import { Services } from '../../service-provider';
 import { AlertBox } from '../AlertBox';
 import { AlertBoxModule } from '../useAlertBox';
-import { useWidgetRoot } from './useWidget';
-import { getDefined } from '../../../util/properties-type-guards';
+import { useWidgetRoot, WidgetModule } from './useWidget';
 // TODO: import other widgets here to avoid merge conflicts
 // BitGoal
 // DonationGoal
@@ -14,11 +13,11 @@ import { getDefined } from '../../../util/properties-type-guards';
 // StarsGoal
 // SubGoal
 // SubscriberGoal
-// ChatBox
+import { ChatBox, ChatBoxModule } from '../ChatBox';
 // ChatHighlight
 // Credits
-// DonationTicker
-// EmoteWall
+import { DonationTicker, DonationTickerModule } from '../DonationTicker';
+import { EmoteWall, EmoteWallModule } from '../EmoteWall';
 // EventList
 // MediaShare
 // Poll
@@ -26,13 +25,15 @@ import { getDefined } from '../../../util/properties-type-guards';
 // SponsorBanner
 // StreamBoss
 // TipJar
+import { GameWidget, GameWidgetModule } from '../GameWidget';
 import { ViewerCount, ViewerCountModule } from '../ViewerCount';
+import { CustomWidget, CustomWidgetModule } from '../CustomWidget';
 import { useSubscription } from '../../hooks/useSubscription';
+import { useChildWindowParams } from 'components-react/hooks';
 
 // define list of Widget components and modules
 export const components = {
   AlertBox: [AlertBox, AlertBoxModule],
-  // TODO: define other widgets here to avoid merge conflicts
   // BitGoal
   // DonationGoal
   // CharityGoal
@@ -40,11 +41,11 @@ export const components = {
   // StarsGoal
   // SubGoal
   // SubscriberGoal
-  // ChatBox
+  ChatBox: [ChatBox, ChatBoxModule],
   // ChatHighlight
   // Credits
-  // DonationTicker
-  // EmoteWall
+  DonationTicker: [DonationTicker, DonationTickerModule],
+  EmoteWall: [EmoteWall, EmoteWallModule],
   // EventList
   // MediaShare
   // Poll
@@ -53,24 +54,26 @@ export const components = {
   // StreamBoss
   // TipJar
   ViewerCount: [ViewerCount, ViewerCountModule],
+  GameWidget: [GameWidget, GameWidgetModule],
+  CustomWidget: [CustomWidget, CustomWidgetModule],
 };
 
 /**
  * Renders a widget window by given sourceId from window's query params
  */
 export function WidgetWindow() {
-  const { WindowsService, WidgetsService } = Services;
+  const { WidgetsService } = Services;
+  const { sourceId, widgetType } = useChildWindowParams();
 
   // take the source id and widget's component from the window's params
-  const { sourceId, WidgetModule, WidgetSettingsComponent } = useOnCreate(() => {
-    const { sourceId, widgetType } = WindowsService.getChildWindowQueryParams();
-    const [WidgetSettingsComponent, WidgetModule] = components[widgetType];
-    return { sourceId, WidgetModule, WidgetSettingsComponent };
+  const { Module, WidgetSettingsComponent } = useOnCreate(() => {
+    const [WidgetSettingsComponent, Module] = components[widgetType];
+    return { sourceId, Module, WidgetSettingsComponent };
   });
 
   // initialize the Redux module for the widget
   // so all children components can use it via `useWidget()` call
-  const { reload } = useWidgetRoot(WidgetModule, { sourceId });
+  const { reload } = useWidgetRoot(Module as typeof WidgetModule, { sourceId });
 
   useSubscription(WidgetsService.settingsInvalidated, reload);
 

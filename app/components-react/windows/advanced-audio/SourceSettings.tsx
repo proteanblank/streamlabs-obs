@@ -11,7 +11,7 @@ import InputWrapper from 'components-react/shared/inputs/InputWrapper';
 import Form from 'components-react/shared/inputs/Form';
 import { TObsValue, IObsListInput, TObsFormData } from 'components/obs/inputs/ObsInput';
 import { Services } from 'components-react/service-provider';
-import { useVuex } from 'components-react/hooks';
+import { useChildWindowParams, useVuex } from 'components-react/hooks';
 import { AudioSource } from 'services/audio';
 import { Source } from 'services/sources';
 import { $t } from 'services/i18n';
@@ -23,10 +23,7 @@ const { Panel } = Collapse;
 export default function AdvancedAudio() {
   const { AudioService, WindowsService } = Services;
 
-  const initialSource = useMemo<string>(
-    () => WindowsService.getChildWindowQueryParams().sourceId || '',
-    [],
-  );
+  const initialSource = useChildWindowParams('sourceId') || '';
   const [expandedSource, setExpandedSource] = useState(initialSource);
 
   const { audioSources } = useVuex(() => ({
@@ -49,17 +46,26 @@ export default function AdvancedAudio() {
 }
 
 function PanelHeader(p: { source: AudioSource }) {
-  const { name, mixerHidden, muted, fader, sourceId, audioMixers } = p.source;
   const { EditorCommandsService, SettingsService } = Services;
-  const { isAdvancedOutput, recordingTracks, streamTrack, vodTrackEnabled, vodTrack } = useVuex(
-    () => ({
-      isAdvancedOutput: SettingsService.views.isAdvancedOutput,
-      streamTrack: SettingsService.views.streamTrack,
-      recordingTracks: SettingsService.views.recordingTracks,
-      vodTrackEnabled: SettingsService.views.vodTrackEnabled,
-      vodTrack: SettingsService.views.vodTrack,
-    }),
-  );
+
+  const {
+    isAdvancedOutput,
+    recordingTracks,
+    streamTrack,
+    vodTrackEnabled,
+    vodTrack,
+    muted,
+  } = useVuex(() => ({
+    isAdvancedOutput: SettingsService.views.isAdvancedOutput,
+    streamTrack: SettingsService.views.streamTrack,
+    recordingTracks: SettingsService.views.recordingTracks,
+    vodTrackEnabled: SettingsService.views.vodTrackEnabled,
+    vodTrack: SettingsService.views.vodTrack,
+    // Hack to make muted property reactive
+    muted: p.source.muted,
+  }));
+
+  const { name, mixerHidden, fader, audioMixers, sourceId } = p.source;
 
   const [trackFlags, setTrackFlags] = useState(
     Utils.numberToBinnaryArray(audioMixers, 6).reverse(),
@@ -195,6 +201,8 @@ function PanelForm(p: { source: AudioSource }) {
       ].includes(source.type)
     : false;
 
+  const isProcessCapture = source?.type === 'wasapi_process_output_capture';
+
   const { EditorCommandsService } = Services;
 
   function handleSettingsChange(name: string, value: TObsValue) {
@@ -233,16 +241,19 @@ function PanelForm(p: { source: AudioSource }) {
         label={$t('Sync Offset')}
         value={syncOffset}
         name="syncOffset"
-        onInput={value => handleSettingsChange('syncOffset', value)}
+        onChange={value => handleSettingsChange('syncOffset', value)}
         tooltip={$t('Time it takes between sound occuring and being broadcast (ms)')}
+        min={-950}
+        max={5000}
+        uncontrolled={false}
       />
-      <SwitchInput
+      {!isProcessCapture && <SwitchInput
         label={$t('Downmix to Mono')}
         value={forceMono}
         name="forceMono"
         onChange={value => handleSettingsChange('forceMono', value)}
         tooltip={$t('Route audio to the central channel instead of left or right stereo channels')}
-      />
+      />}
       <ListInput
         label={$t('Audio Monitoring')}
         options={p.source.monitoringOptions}
@@ -288,19 +299,31 @@ function DeviceInputs(p: { source: Source }) {
     setStatefulSettings({ ...statefulSettings, [name]: value });
   }
 
-  return (
-    <>
+  const input =
+    p.source.type === 'wasapi_process_output_capture' ? (
+      <ListInput
+        label={$t('Window')}
+        options={deviceOptions}
+        value={statefulSettings.window}
+        onChange={value => handleInput('window', value)}
+      />
+    ) : (
       <ListInput
         label={$t('Device')}
         options={deviceOptions}
         value={statefulSettings.device_id}
         onChange={value => handleInput('device_id', value)}
       />
-      <SwitchInput
+    );
+
+  return (
+    <>
+      {input}
+      {p.source.type !== 'wasapi_process_output_capture' && <SwitchInput
         label={$t('Use Device Timestamps')}
         value={statefulSettings.use_device_timing}
         onChange={value => handleInput('use_device_timing', value)}
-      />
+      />}
     </>
   );
 }

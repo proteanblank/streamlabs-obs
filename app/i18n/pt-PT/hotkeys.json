@@ -9,7 +9,7 @@
   "Push to Show %{sourcename}": "Premir para mostrar %{sourcename}",
   "Push to Hide %{sourcename}": "Premir para ocultar %{sourcename}",
   "Mute": "Silenciar",
-  "Unmute": "Reativar áudio",
+  "Unmute": "Re-activar áudio",
   "Push to Mute": "Premir para silenciar",
   "Push to Talk": "Premir para falar",
   "Enable Studio Mode": "Ativar modo de estúdio",
@@ -23,5 +23,6 @@
   "Next Slide": "Diapositivo seguinte",
   "Previous Slide": "Diapositivo anterior",
   "Toggle Performance Mode": "Ativar/Desativar modo de desempenho",
-  "Skip Alert": "Pular alerta"
+  "Skip Alert": "Pular alerta",
+  "To use hotkeys on Mac, go to System Settings > Security > Accessibility and toggle on for Streamlabs Desktop.": "To use hotkeys on Mac, go to System Settings > Security > Accessibility and toggle on for Streamlabs Desktop."
 }

@@ -10,6 +10,7 @@ export { ExternalApiLimitsService } from 'services/api/external-api-limits';
 export { SourcesService, Source } from 'services/sources';
 export { Scene, SceneItem, SceneItemFolder, ScenesService } from 'services/scenes';
 export { ObsImporterService } from 'services/obs-importer';
+export { TwitchStudioImporterService } from 'services/ts-importer';
 export { ClipboardService } from 'services/clipboard';
 export { AudioService, AudioSource } from 'services/audio';
 export { HostsService, UrlService } from 'services/hosts';
@@ -54,17 +55,34 @@ export { MacPermissionsService } from 'services/mac-permissions';
 export { VirtualWebcamService } from 'services/virtual-webcam';
 export { MetricsService } from 'services/metrics';
 export { HighlighterService } from 'services/highlighter';
+export { DiagnosticsService } from 'services/diagnostics';
+export { RecordingModeService } from 'services/recording-mode';
+export { SideNavService } from 'services/side-nav';
+export { VideoSettingsService } from 'services/settings-v2/video';
+export { SettingsManagerService } from 'services/settings-manager';
+export { MarkersService } from 'services/markers';
+export { RealmService } from 'services/realm';
 
 // ONLINE SERVICES
 export { UserService } from './services/user';
 export { YoutubeService } from 'services/platforms/youtube';
 export { TwitchService } from 'services/platforms/twitch';
+export {
+  TwitchTagsService,
+  TwitchContentClassificationService,
+} from 'services/platforms/twitch/index';
 export { FacebookService } from 'services/platforms/facebook';
-export { TiktokService } from 'services/platforms/tiktok';
+export { TikTokService } from 'services/platforms/tiktok';
+export { TrovoService } from 'services/platforms/trovo';
+export { KickService } from 'services/platforms/kick';
 export { RestreamService } from 'services/restream';
 export { TwitterService } from 'services/integrations/twitter';
+export { TwitterPlatformService } from 'services/platforms/twitter';
+export { InstagramService } from 'services/platforms/instagram';
 export { UsageStatisticsService } from './services/usage-statistics';
 export { GameOverlayService } from 'services/game-overlay';
+export { SharedStorageService } from 'services/integrations/shared-storage';
+export { RemoteControlService } from 'services/api/remote-control-api';
 
 export { MediaGalleryService } from 'services/media-gallery';
 export { MediaBackupService } from 'services/media-backup';
@@ -85,18 +103,18 @@ export { ChatService } from 'services/chat';
 export { RecentEventsService } from 'services/recent-events';
 export { MagicLinkService } from 'services/magic-link';
 export { GrowService } from 'services/grow/grow';
+export { GuestCamService } from 'services/guest-cam';
+export { DualOutputService } from 'services/dual-output';
 
 // WIDGETS
 export { WidgetSource, WidgetsService } from './services/widgets';
 export { BitGoalService } from 'services/widgets/settings/bit-goal';
-export { ChatBoxService } from 'services/widgets/settings/chat-box';
 export { DonationGoalService } from 'services/widgets/settings/donation-goal';
 export { FollowerGoalService } from 'services/widgets/settings/follower-goal';
 export { StarsGoalService } from 'services/widgets/settings/stars-goal';
 export { SupporterGoalService } from 'services/widgets/settings/supporter-goal';
 export { SubscriberGoalService } from 'services/widgets/settings/subscriber-goal';
 export { CharityGoalService } from 'services/widgets/settings/charity-goal';
-export { ViewerCountService } from 'services/widgets/settings/viewer-count';
 export { StreamBossService } from 'services/widgets/settings/stream-boss';
 export { DonationTickerService } from 'services/widgets/settings/donation-ticker';
 export { CreditsService } from 'services/widgets/settings/credits';
@@ -110,6 +128,7 @@ export { SpinWheelService } from 'services/widgets/settings/spin-wheel';
 export { PollService } from 'services/widgets/settings/poll';
 export { EmoteWallService } from 'services/widgets/settings/emote-wall';
 export { ChatHighlightService } from 'services/widgets/settings/chat-highlight';
+export { SuperchatGoalService } from 'services/widgets/settings/superchat-goal';
 
 import { AppService } from './services/app';
 import { WindowsService } from './services/windows';
@@ -119,6 +138,7 @@ import { EditorCommandsService } from './services/editor-commands';
 import { EditorService } from 'services/editor';
 import { PerformanceService } from './services/performance';
 import { SourcesService } from './services/sources';
+import { SelectionService } from './services/selection';
 import { StreamingService } from './services/streaming';
 import { StreamSettingsService } from './services/settings/streaming';
 import { RestreamService } from './services/restream';
@@ -127,8 +147,15 @@ import { TwitterService } from './services/integrations/twitter';
 import { SettingsService } from './services/settings';
 import { UserService } from './services/user';
 import { TwitchService } from './services/platforms/twitch';
+import { TwitterPlatformService } from './services/platforms/twitter';
+import {
+  TwitchTagsService,
+  TwitchContentClassificationService,
+} from './services/platforms/twitch/index';
+import { TrovoService } from './services/platforms/trovo';
 import { YoutubeService } from './services/platforms/youtube';
 import { FacebookService } from './services/platforms/facebook';
+import { TikTokService } from './services/platforms/tiktok';
 import { DismissablesService } from './services/dismissables';
 import { NavigationService } from './services/navigation';
 import { AnnouncementsService } from './services/announcements';
@@ -138,6 +165,7 @@ import { ChatService } from './services/chat';
 import { HighlighterService } from './services/highlighter';
 import { GrowService } from './services/grow/grow';
 import { TransitionsService } from './services/transitions';
+import { TcpServerService } from './services/api/tcp-server';
 import { MagicLinkService } from './services/magic-link';
 import { UsageStatisticsService } from './services/usage-statistics';
 import { NotificationsService } from './services/notifications';
@@ -154,6 +182,34 @@ import { MediaGalleryService } from './services/media-gallery';
 import { RecentEventsService } from 'services/recent-events';
 import { AudioService } from './services/audio';
 import { SourceFiltersService } from './services/source-filters';
+import { DiagnosticsService } from './services/diagnostics';
+import { WebsocketService } from './services/websocket';
+import { SpinWheelService } from 'services/widgets/settings/spin-wheel';
+import { LayoutService } from './services/layout';
+import { ProjectorService } from './services/projector';
+import { ObsImporterService } from 'services/obs-importer';
+import { DefaultHardwareService, HardwareService } from 'services/hardware';
+import { AutoConfigService } from 'services/auto-config';
+import { MacPermissionsService } from 'services/mac-permissions';
+import { IncrementalRolloutService } from './services/incremental-rollout';
+import { RecordingModeService } from 'services/recording-mode';
+import { JsonrpcService } from 'services/api/jsonrpc';
+import { OverlaysPersistenceService } from 'services/scene-collections/overlays';
+import { PlatformAppStoreService } from 'services/platform-app-store';
+import { GameOverlayService } from 'services/game-overlay';
+import { GuestCamService } from 'services/guest-cam';
+import { SideNavService } from './services/side-nav';
+import { VideoSettingsService } from 'services/settings-v2/video';
+import { SettingsManagerService } from 'services/settings-manager';
+import { DualOutputService } from 'services/dual-output';
+import { MarkersService } from 'services/markers';
+import { SharedStorageService } from 'services/integrations/shared-storage';
+import { RealmService } from 'services/realm';
+import { InstagramService } from 'services/platforms/instagram';
+import { TwitchStudioImporterService } from 'services/ts-importer';
+import { RemoteControlService } from 'services/api/remote-control-api';
+import { UrlService } from 'services/hosts';
+import { KickService } from 'services/platforms/kick';
 
 export const AppServices = {
   AppService,
@@ -168,6 +224,7 @@ export const AppServices = {
   EditorService,
   PerformanceService,
   SourcesService,
+  SelectionService,
   PatchNotesService,
   VideoService,
   ChatService,
@@ -178,12 +235,20 @@ export const AppServices = {
   TwitterService,
   YoutubeService,
   FacebookService,
+  TikTokService,
   UserService,
   TwitchService,
+  TwitterPlatformService,
+  TwitchTagsService,
+  TwitchContentClassificationService,
+  TrovoService,
+  KickService,
+  InstagramService,
   DismissablesService,
   HighlighterService,
   GrowService,
   TransitionsService,
+  TcpServerService,
   MagicLinkService,
   MediaGalleryService,
   UsageStatisticsService,
@@ -199,4 +264,31 @@ export const AppServices = {
   PlatformAppsService,
   AudioService,
   SourceFiltersService,
+  DiagnosticsService,
+  WebsocketService,
+  SpinWheelService,
+  LayoutService,
+  ProjectorService,
+  ObsImporterService,
+  TwitchStudioImporterService,
+  DefaultHardwareService,
+  AutoConfigService,
+  MacPermissionsService,
+  IncrementalRolloutService,
+  RecordingModeService,
+  JsonrpcService,
+  OverlaysPersistenceService,
+  PlatformAppStoreService,
+  GameOverlayService,
+  GuestCamService,
+  HardwareService,
+  SideNavService,
+  VideoSettingsService,
+  SettingsManagerService,
+  DualOutputService,
+  MarkersService,
+  SharedStorageService,
+  RealmService,
+  RemoteControlService,
+  UrlService,
 };

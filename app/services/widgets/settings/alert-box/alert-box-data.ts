@@ -17,10 +17,9 @@ export const API_NAME_MAP = {
   tiltifydonation: 'tiltify',
   treat: 'treat',
   follow: 'follows',
-  host: 'hosts',
-  raid: 'raids',
   superheart: 'superhearts',
   fanfunding: 'fanfunding',
+  raid: 'raids',
   subscriber: 'subscribers', // YouTube
   sponsor: 'sponsors',
   facebook_support_gifter: 'giftSupport',
@@ -30,6 +29,9 @@ export const API_NAME_MAP = {
   facebook_share: 'shares',
   facebook_follow: 'fbfollows',
   loyalty_store_redemption: 'loyaltystore',
+  trovo_follow: 'trovo_follow',
+  trovo_sub: 'trovo_sub',
+  trovo_raid: 'trovo_raid',
 };
 
 export const alertNameMap = () => ({
@@ -46,11 +48,10 @@ export const alertNameMap = () => ({
   tiltify: $t('Tiltify Donations'),
   treat: $t('TreatStream'),
   follows: $t('Follows'),
-  hosts: $t('Hosts'),
-  raids: $t('Raids'),
   superhearts: $t('Super Hearts'),
   fanfunding: $t('Super Chat'),
   sponsors: $t('Members'),
+  raids: $t('Raids'),
   subscribers: $t('Subscribers'), // YouTube
   stars: $t('Stars'),
   support: $t('Support'),
@@ -61,6 +62,9 @@ export const alertNameMap = () => ({
   loyaltystore: $t('Cloudbot Store'),
   stickers: $t('Stickers'),
   effects: $t('Effects/Rallies'),
+  trovo_follow: $t('Trovo Follow'),
+  trovo_sub: $t('Trovo Subscription'),
+  trovo_raid: $t('Trovo Raid'),
 });
 
 // different tests are required due to api idiosyncracies
@@ -100,8 +104,11 @@ export const conditions = () => ({
       value: 'MIN_SUBSCRIPTION_STREAK',
       title: $t('Streak shared with chat, and months subscribed in a streak is at least <months>'),
     },
+    {
+      value: 'SUBSCRIPTION_PRIME_UPGRADE',
+      title: $t('When a Prime Gaming sub is upgraded to a recurring <tier> sub'),
+    },
   ],
-  hosts: [{ value: 'MIN_VIEWERS_ACQUIRED', title: $t('Viewers gained is at least <viewers>') }],
   bits: [
     { value: 'MIN_BITS_USED', title: $t('Bits used is at least <amount>') },
     { value: 'EXACT_BITS_USED', title: $t('Bits used is exactly <amount>') },
@@ -177,6 +184,7 @@ export const conditionData = () => ({
   SUBSCRIPTION_GIFT: metadata.frequency({ title: $t('Variation Frequency') }),
   SUBSCRIPTION_PRIME: metadata.frequency({ title: $t('Variation Frequency') }),
   SUBTEMBER: metadata.frequency({ title: $t('Variation Frequency') }),
+  SUBSCRIPTION_PRIME_UPGRADE: metadata.frequency({ title: $t('Variation Frequency') }),
   ANON_SUBSCRIPTION_GIFT: metadata.frequency({ title: $t('Variation Frequency') }),
   SUB_EXTENDED: metadata.frequency({ title: $t('Variation Frequency') }),
   SUPPORT_GIFT_REDEEMED: metadata.frequency({ title: $t('Variation Frequency') }),
@@ -251,11 +259,10 @@ const DEFAULT_ALERT_FORMATS = {
   tiltify: '{name} has just donated {amount} via Tiltify!',
   treat: '{name} bought you a {title} treat via Treatstream!',
   follows: '{name} is now following!',
-  hosts: '{name} just hosted for {count} viewers!',
-  raids: '{name} is raiding with a party of {count}!',
   superhearts: '{name} gifted {style} worth {amount} coins!',
   fanfunding: '{name} has just donated {amount} through Super Chat!',
   subscribers: '{name} just subscribed!', // YouTube
+  raids: '{name} is raiding with a party of {count}!',
   sponsors: '{name} has sponsored you {months} months in a row!',
   support: '{name} has supported for {months} months!',
   likes: '{name} has liked!',

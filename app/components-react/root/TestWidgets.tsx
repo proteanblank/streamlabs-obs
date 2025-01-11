@@ -1,20 +1,21 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import Animation from 'rc-animate';
 import { Services } from '../service-provider';
 import { $t } from '../../services/i18n';
 
-export default function TestWidgets(p: { testers: string[] }) {
+export default function TestWidgets(p: { testers?: string[] }) {
   const { WidgetsService } = Services;
 
   const [slideOpen, setSlideOpen] = useState(false);
 
-  const allTesters = WidgetsService.getTesters();
+  const allTesters = useMemo(() => WidgetsService.views.testers, []);
   const widgetTesters = p.testers
-    ? allTesters.filter(tester => p.testers.includes(tester.name))
+    ? allTesters.filter(tester => p.testers?.includes(tester.name))
     : allTesters;
 
   function test(testerName: string) {
-    WidgetsService.test(testerName);
+    // TODO: uses deprecated function
+    WidgetsService.actions.test(testerName);
   }
 
   return (
@@ -24,7 +25,7 @@ export default function TestWidgets(p: { testers: string[] }) {
       </a>
       <Animation transitionName="ant-slide-right">
         {slideOpen && (
-          <div className="slide-open__menu">
+          <div className="slide-open__menu" style={{ zIndex: 1011 }}>
             {widgetTesters.map(tester => (
               <button
                 className="button button--trans"
