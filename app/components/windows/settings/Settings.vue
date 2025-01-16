@@ -32,17 +32,24 @@
             :ico="icons[category]"
             :class="{ disabled: searchStr && !searchResultPages.includes(category) }"
           >
-            {{ $t(category) }}
+            <div :style="{ display: 'flex' }" @click="dismiss(category)">
+              {{ $t(category) }}
+              <NewBadge
+                v-if="
+                  dismissables[category] &&
+                  dismissablesService.views.shouldShow(dismissables[category])
+                "
+                :componentProps="{ dismissableKey: 'custom_menu_settings' }"
+              />
+            </div>
           </NavItem>
           <NavItem
-            v-if="!isPrime && isLoggedIn"
             key="Prime"
-            to="Prime"
-            ico="icon-prime"
-            :icoStyles="{ color: 'var(--prime)' }"
-            :style="{ color: 'var(--prime)' }"
+            to="Ultra"
+            :ultra="true"
+            :class="{ disabled: searchStr && !searchResultPages.includes('ultra') }"
           >
-            Prime
+            Ultra
           </NavItem>
           <div
             class="settings-auth"
@@ -56,7 +63,7 @@
             <strong>{{ userService.isLoggedIn ? $t('Log Out') : $t('Log In') }}</strong>
             <platform-logo
               v-if="userService.isLoggedIn"
-              :componentProps="{ platform: userService.platform.type, size: 14 }"
+              :componentProps="{ platform: userService.platform.type, size: 'small' }"
             />
             <span v-if="userService.isLoggedIn">{{ userService.username }}</span>
           </div>
@@ -75,20 +82,18 @@
           @scanCompleted="onScanCompletedHandler"
           v-slot:default="{ page, scanning }"
         >
-          <hotkeys
+          <Hotkeys
             v-if="page === 'Hotkeys'"
-            :globalSearchStr="scanning ? '' : searchStr"
-            :highlightSearch="highlightSearch"
-            :scanning="scanning"
+            :componentProps="{
+              highlightSearch,
+              scanning,
+              globalSearchStr: scanning ? '' : searchStr,
+            }"
           />
-          <stream-settings v-if="page === 'Stream'" />
           <developer-settings v-if="page === 'Developer'" />
           <installed-apps v-if="page === 'Installed Apps'" />
           <overlay-settings v-if="page === 'Scene Collections'" />
           <notifications-settings v-if="page === 'Notifications'" />
-          <experimental-settings v-if="page === 'Experimental'" />
-          <remote-control-settings v-if="page === 'Remote Control'" />
-          <game-overlay-settings v-if="page === 'Game Overlay'" />
           <virtual-webcam-settings v-if="page === 'Virtual Webcam'" />
           <ObsSettings v-if="shouldShowReactPage" :componentProps="{ page: page }" />
           <GenericFormGroups
@@ -108,6 +113,7 @@
 
 <style lang="less" scoped>
 @import '../../../styles/index';
+@import '../../../styles/badges';
 
 .settings {
   & /deep/ h2 {
@@ -122,13 +128,15 @@
   height: 100%;
 
   .search {
-    width: 177px;
+    width: 100%;
     .margin-left(2);
     .margin-bottom(2);
     & /deep/ input {
       padding-left: 30px;
+      width: calc(100% - 30px);
     }
     & /deep/ .fa {
+      position: absolute;
       left: 0;
       right: auto;
       pointer-events: none;

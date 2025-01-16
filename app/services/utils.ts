@@ -4,6 +4,7 @@ import electron from 'electron';
 import cloneDeep from 'lodash/cloneDeep';
 import fs from 'fs';
 import path from 'path';
+import * as remote from '@electron/remote';
 
 export const enum EBit {
   ZERO,
@@ -18,7 +19,12 @@ export interface IEnv {
   SLOBS_VERSION: string;
   SLOBS_TRACE_SYNC_IPC: boolean;
   SLOBS_USE_CDN_MEDIA: boolean;
+  SLD_USE_BETA: boolean;
+  SLD_FORCE_ONBOARDING_STEP: string;
+  // Allows joining as a guest instead of a host for guest cam
+  SLD_GUEST_CAM_HASH: string;
   CI: boolean;
+  HIGHLIGHTER_ENV: 'production' | 'staging' | 'local';
 }
 
 export default class Utils {
@@ -28,7 +34,7 @@ export default class Utils {
    */
   static _env: IEnv;
   static get env() {
-    if (!Utils._env) Utils._env = electron.remote.process.env as any;
+    if (!Utils._env) Utils._env = remote.process.env as any;
     return Utils._env;
   }
 
@@ -77,19 +83,36 @@ export default class Utils {
   }
 
   static getMainWindow(): Electron.BrowserWindow {
-    return electron.remote.BrowserWindow.getAllWindows().find(
+    return remote.BrowserWindow.getAllWindows().find(
       win => Utils.getUrlParams(win.webContents.getURL()).windowId === 'main',
     );
   }
 
   static getChildWindow(): Electron.BrowserWindow {
-    return electron.remote.BrowserWindow.getAllWindows().find(
+    return remote.BrowserWindow.getAllWindows().find(
       win => Utils.getUrlParams(win.webContents.getURL()).windowId === 'child',
     );
   }
 
+  static get isProduction() {
+    return Utils.env.NODE_ENV === 'production';
+  }
+
   static isDevMode() {
     return Utils.env.NODE_ENV !== 'production';
+  }
+
+  static getHighlighterEnvironment(): 'production' | 'staging' | 'local' {
+    // need to use this remote thing because main process is being spawned as
+    // subprocess of updater process in the release build
+    if (remote.process.argv.includes('--bundle-qa')) {
+      return 'staging';
+    }
+
+    if (process.env.HIGHLIGHTER_ENV !== 'staging' && process.env.HIGHLIGHTER_ENV !== 'local') {
+      return 'production';
+    }
+    return process.env.HIGHLIGHTER_ENV as 'production' | 'staging' | 'local';
   }
 
   static isTestMode() {
@@ -106,6 +129,10 @@ export default class Utils {
 
   static shouldUseLocalHost(): boolean {
     return Utils.env.SLOBS_USE_LOCAL_HOST as boolean;
+  }
+
+  static shouldUseBeta(): boolean {
+    return (process.env.SLD_COMPILE_FOR_BETA || Utils.env.SLD_USE_BETA) as boolean;
   }
 
   /**
@@ -266,7 +293,7 @@ let appPath: string;
  * Memoized function for getting the app path
  */
 export function getAppPath() {
-  appPath = appPath ?? electron.remote.app.getAppPath();
+  appPath = appPath ?? remote.app.getAppPath();
   return appPath;
 }
 

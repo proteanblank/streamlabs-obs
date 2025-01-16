@@ -1,3 +1,6 @@
+import moment from 'moment';
+import flatten from 'lodash/flatten';
+import * as remote from '@electron/remote';
 import { mutation, InheritMutations, ViewHandler } from '../core/stateful-service';
 import { IPlatformService, IGame, TPlatformCapability, IPlatformRequest, IPlatformState } from '.';
 import { HostsService } from 'services/hosts';
@@ -8,10 +11,14 @@ import { platformAuthorizedRequest, platformRequest } from './utils';
 import { IGoLiveSettings } from 'services/streaming';
 import { throwStreamError } from 'services/streaming/stream-error';
 import { BasePlatformService } from './base-platform';
-import electron from 'electron';
 import { WindowsService } from '../windows';
 import { assertIsDefined, getDefined } from '../../util/properties-type-guards';
-import { flatten } from 'lodash';
+import { TDisplayType } from 'services/settings-v2';
+import { TOutputOrientation } from 'services/restream';
+import { ENotificationType, NotificationsService } from '../notifications';
+import { $t } from '../i18n';
+import { Service } from '../core';
+import { JsonrpcService } from '../api/jsonrpc';
 
 interface IFacebookPage {
   access_token: string;
@@ -29,19 +36,29 @@ interface IFacebookGroup {
   administrator: boolean;
 }
 
+interface IFacebookEvent {
+  description: string;
+  name: string;
+  start_time: string;
+  id: string;
+}
+
+type TFacebookStatus = 'UNPUBLISHED' | 'SCHEDULED_UNPUBLISHED' | 'LIVE_STOPPED' | 'LIVE';
+
 export interface IFacebookLiveVideo {
-  status: 'UNPUBLISHED' | 'SCHEDULED_UNPUBLISHED' | 'LIVE_STOPPED' | 'LIVE';
+  status: TFacebookStatus;
   id: string;
   stream_url: string;
   title: string;
+  /** @deprecated: doesn't exist on their API docs  */
   game: string;
   description: string;
   permalink_url: string;
-  planned_start_time: string;
+  video: { id: string };
   broadcast_start_time: string;
-  video: {
-    id: string;
-  };
+  planned_start_time?: string;
+  /** custom fields we've created */
+  event_params: { start_time?: number; cover?: string; status?: TFacebookStatus };
 }
 
 /**
@@ -80,7 +97,8 @@ export interface IFacebookStartStreamOptions {
   description?: string;
   liveVideoId?: string;
   privacy?: { value: TFacebookStreamPrivacy };
-  plannedStartTime?: number;
+  mode?: TOutputOrientation;
+  event_params: { start_time?: number; cover?: string; status?: TFacebookStatus };
 }
 
 export type TDestinationType = 'me' | 'page' | 'group' | '';
@@ -107,6 +125,8 @@ const initialState: IFacebookServiceState = {
     title: '',
     description: '',
     game: '',
+    mode: undefined,
+    event_params: {},
     privacy: { value: 'EVERYONE' },
   },
 };
@@ -129,6 +149,8 @@ export class FacebookService
   implements IPlatformService {
   @Inject() protected hostsService: HostsService;
   @Inject() private windowsService: WindowsService;
+  @Inject() private notificationsService: NotificationsService;
+  @Inject() private jsonrpcService: JsonrpcService;
 
   readonly platform = 'facebook';
   readonly displayName = 'Facebook';
@@ -149,6 +171,13 @@ export class FacebookService
   authWindowOptions: Electron.BrowserWindowConstructorOptions = { width: 800, height: 800 };
 
   static initialState = initialState;
+
+  // TODO: not sure if JSONRPC we're doing with this allows static method, so keeping it as instance for now
+  openStreamIneligibleHelp() {
+    const FACEBOOK_STREAM_INELIGIBLE_HELP =
+      'https://www.facebook.com/business/help/216491699144904';
+    return remote.shell.openExternal(FACEBOOK_STREAM_INELIGIBLE_HELP);
+  }
 
   get views() {
     return new FacebookView(this.state);
@@ -195,7 +224,7 @@ export class FacebookService
     this.state.videoId = id;
   }
 
-  apiBase = 'https://graph.facebook.com';
+  apiBase = 'https://graph.facebook.com/v16.0';
 
   get authUrl() {
     const host = this.hostsService.streamlabs;
@@ -221,7 +250,7 @@ export class FacebookService
     return this.state.streamDashboardUrl;
   }
 
-  async beforeGoLive(options: IGoLiveSettings) {
+  async beforeGoLive(options: IGoLiveSettings, context?: TDisplayType) {
     const fbOptions = getDefined(options.platforms.facebook);
 
     let liveVideo: IFacebookLiveVideo;
@@ -239,14 +268,17 @@ export class FacebookService
 
     // setup stream key and new settings
     const streamUrl = liveVideo.stream_url;
-    const streamKey = streamUrl.substr(streamUrl.lastIndexOf('/') + 1);
+    const streamKey = streamUrl.slice(streamUrl.lastIndexOf('/') + 1);
     if (!this.streamingService.views.isMultiplatformMode) {
-      this.streamSettingsService.setSettings({
-        key: streamKey,
-        platform: 'facebook',
-        streamType: 'rtmp_common',
-        server: 'rtmps://rtmp-api.facebook.com:443/rtmp/',
-      });
+      this.streamSettingsService.setSettings(
+        {
+          key: streamKey,
+          platform: 'facebook',
+          streamType: 'rtmp_common',
+          server: 'rtmps://rtmp-api.facebook.com:443/rtmp/',
+        },
+        context,
+      );
     }
     this.SET_STREAM_KEY(streamKey);
     this.SET_STREAM_PAGE_URL(`https://facebook.com/${liveVideo.permalink_url}`);
@@ -259,6 +291,8 @@ export class FacebookService
       assertIsDefined(fbOptions.pageId);
       await this.postPage(fbOptions.pageId);
     }
+
+    this.setPlatformContext('facebook');
   }
 
   /**
@@ -279,16 +313,23 @@ export class FacebookService
     options: IFacebookUpdateVideoOptions,
     switchToLive = false,
   ): Promise<IFacebookLiveVideo> {
-    const { title, description, game, privacy, plannedStartTime } = options;
+    const { title, description, game, privacy, event_params } = options;
     const data: Dictionary<any> = { title, description };
-    if (game) data.game_specs = { name: game };
 
-    if (plannedStartTime) {
+    // game info is currently broken in fb api
+    // if (game) data.game_specs = { name: game };
+
+    if (Object.keys(event_params).length) {
+      data.event_params = event_params;
+    }
+
+    if (event_params.start_time) {
       // convert plannedStartTime from milliseconds to seconds
-      data.planned_start_time = Math.round(new Date(plannedStartTime).getTime() / 1000);
+      data.event_params.start_time = Math.round(new Date(event_params.start_time).getTime() / 1000);
     }
     if (switchToLive) {
       data.status = 'LIVE_NOW';
+      data.event_params.status = 'LIVE_NOW';
     }
     const destinationId = this.views.getDestinationId(options);
     const token = this.views.getDestinationToken(options.destinationType, destinationId);
@@ -357,9 +398,32 @@ export class FacebookService
         ? await platformRequest<T>('facebook', reqInfo, token)
         : await platformAuthorizedRequest<T>('facebook', reqInfo);
     } catch (e: unknown) {
-      const details = (e as any).result?.error
-        ? `${(e as any).result.error.type} ${(e as any).result.error.message}`
-        : 'Connection failed';
+      const ACCOUNT_NOT_OLD_ENOUGH = 1363120;
+      const NOT_ENOUGH_FOLLOWERS_FOR_PAGE = 1363144;
+      // We don't know what this is, but their API started returning this shortly after, with the same messaging
+      // it is possible the two above have been merged into this
+      const UNKNOWN_SUBCODE = 1969070;
+      const notEligibleErrorCodes = [
+        ACCOUNT_NOT_OLD_ENOUGH,
+        NOT_ENOUGH_FOLLOWERS_FOR_PAGE,
+        UNKNOWN_SUBCODE,
+      ];
+      const error = (e as any).result?.error;
+
+      if (error && notEligibleErrorCodes.includes(error.error_subcode)) {
+        // TODO: probably not a good idea to be pushing notifications from service code, again
+        this.notificationsService.push({
+          type: ENotificationType.WARNING,
+          message: $t('Your account is not eligible to stream on Facebook. Click to learn more'),
+          action: this.jsonrpcService.createRequest(
+            Service.getResourceId(this),
+            'openStreamIneligibleHelp',
+          ),
+        });
+        throwStreamError('FACEBOOK_STREAMING_DISABLED', e as any);
+      }
+
+      const details = error ? `${error.type} ${error.message}` : 'Connection failed';
       throwStreamError('PLATFORM_REQUEST_FAILED', e as any, details);
     }
   }
@@ -391,7 +455,8 @@ export class FacebookService
     const destinationId = this.views.getDestinationId(options);
     const token = this.views.getDestinationToken(options.destinationType, destinationId);
     const body: Dictionary<any> = { title, description };
-    if (game) body.game_specs = { name: game };
+    // game info is currently broken in fb api
+    // if (game) body.game_specs = { name: game };
     if (privacy?.value) body.privacy = privacy;
 
     return this.requestFacebook<IFacebookLiveVideo>(
@@ -467,10 +532,13 @@ export class FacebookService
     const data: Dictionary<any> = {
       title,
       description,
-      planned_start_time: Math.round(new Date(scheduledStartTime).getTime() / 1000),
-      status: 'SCHEDULED_UNPUBLISHED',
+      event_params: {
+        start_time: Math.round(new Date(scheduledStartTime).getTime() / 1000),
+        status: 'SCHEDULED_UNPUBLISHED',
+      },
     };
-    if (game) data.game_specs = { name: game };
+    // game info is currently broken in fb api
+    // if (game) data.game_specs = { name: game };
     const body = JSON.stringify(data);
     return await this.requestFacebook({ url, body, method: 'POST' }, token);
   }
@@ -483,8 +551,6 @@ export class FacebookService
     const timeRange = 1000 * 60 * 60 * 24;
     const maxDate = Date.now() + timeRange;
     const minDate = Date.now() - timeRange;
-    const maxDateUnix = Math.floor(maxDate / 1000);
-    const minDateUnix = Math.floor(minDate / 1000);
     const token = this.views.getDestinationToken(destinationType, destinationId);
     let sourceParam = '';
     if (destinationType === 'page' || destinationType === 'me') {
@@ -492,24 +558,42 @@ export class FacebookService
     } else {
       sourceParam = '&source=target';
     }
+    try {
+      let videos = (
+        await this.requestFacebook<{ data: IFacebookEvent[] }>(
+          `${this.apiBase}/${destinationId}/events`,
+          token,
+        )
+      ).data;
 
-    let videos = (
-      await this.requestFacebook<{ data: IFacebookLiveVideo[] }>(
-        `${this.apiBase}/${destinationId}/live_videos?broadcast_status=["UNPUBLISHED","SCHEDULED_UNPUBLISHED"]&fields=title,description,status,planned_start_time,permalink_url,from${sourceParam}&since=${minDateUnix}&until=${maxDateUnix}`,
-        token,
-      )
-    ).data;
+      if (onlyUpcoming) {
+        videos = videos.filter(v => {
+          // some videos created in the new Live Producer don't have `planned_start_time`
+          if (!v.start_time) return true;
 
-    if (onlyUpcoming) {
-      videos = videos.filter(v => {
-        // some videos created in the new Live Producer don't have `planned_start_time`
-        if (!v.planned_start_time) return true;
-
-        const videoDate = new Date(v.planned_start_time).valueOf();
-        return videoDate >= minDate && videoDate <= maxDate;
-      });
+          const videoDate = new Date(v.start_time).valueOf();
+          return videoDate >= minDate && videoDate <= maxDate;
+        });
+      }
+      return videos.map(v => ({
+        id: v.id,
+        title: v.name,
+        stream_url: '',
+        permalink_url: '',
+        event_params: {
+          start_time: moment(v.start_time).unix(),
+          status: 'SCHEDULED_UNPUBLISHED',
+        },
+        description: v.description,
+        status: 'SCHEDULED_UNPUBLISHED',
+        game: '',
+        video: { id: v.id },
+        broadcast_start_time: v.start_time,
+      }));
+    } catch (e: unknown) {
+      // don't break fetching all if user permissions don't exist (403 response)
+      return [];
     }
-    return videos;
   }
 
   /**
@@ -519,52 +603,34 @@ export class FacebookService
     // perform all requests simultaneously
     const requests: Promise<IFacebookLiveVideoExtended[]>[] = [];
 
-    // fetch videos from the timeline and groups
-    if (this.state.grantedPermissions.includes('publish_video')) {
-      const destinationType = 'me';
-      const destinationId = 'me';
-      requests.push(
-        this.fetchScheduledVideos(destinationType, destinationId, onlyUpcoming).then(videos =>
-          videos.map(video => ({
-            ...video,
-            destinationType,
-            destinationId,
-          })),
-        ),
-      );
-    }
-
-    // fetch videos from group
-    if (this.state.grantedPermissions.includes('publish_to_groups')) {
-      const destinationType = 'group';
-      this.state.facebookGroups.forEach(group => {
-        const destinationId = group.id;
-        requests.push(
-          this.fetchScheduledVideos(destinationType, destinationId, onlyUpcoming).then(videos =>
-            videos.map(video => ({
-              ...video,
-              destinationType,
-              destinationId,
-            })),
-          ),
-        );
-      });
-    }
-
     // fetch videos from pages
     this.state.facebookPages.forEach(page => {
       const destinationType = 'page';
       const destinationId = page.id;
       requests.push(
         this.fetchScheduledVideos(destinationType, destinationId, onlyUpcoming).then(videos =>
-          videos.map(video => ({
-            ...video,
-            destinationType,
-            destinationId,
-          })),
+          videos.map(video => ({ ...video, destinationType, destinationId })),
         ),
       );
     });
+
+    // fetch videos from groups
+    this.state.facebookGroups.forEach(group => {
+      const destinationType = 'group';
+      const destinationId = group.id;
+      requests.push(
+        this.fetchScheduledVideos(destinationType, destinationId, onlyUpcoming).then(videos =>
+          videos.map(video => ({ ...video, destinationType, destinationId })),
+        ),
+      );
+    });
+
+    // fetch videos from timeline
+    requests.push(
+      this.fetchScheduledVideos('me', 'me', onlyUpcoming).then(videos =>
+        videos.map(video => ({ ...video, destinationType: 'me', destinationId: 'me' })),
+      ),
+    );
 
     // wait for all requests
     const videoCollections = await Promise.all(requests);
@@ -603,6 +669,7 @@ export class FacebookService
       description: video.description,
       pageId: destinationId,
       groupId: destinationId,
+      event_params: video.event_params,
     };
   }
 
@@ -649,7 +716,7 @@ export class FacebookService
   async searchGames(searchString: string): Promise<IGame[]> {
     if (searchString.length < 2) return [];
     const gamesResponse = await this.requestFacebook<{ data: { name: string; id: string }[] }>(
-      `${this.apiBase}/v3.2/search?type=game&q=${searchString}`,
+      `${this.apiBase}/search?type=game&q=${searchString}`,
     );
     return gamesResponse.data.slice(0, 15).map(g => ({ id: g.id, name: g.name }));
   }
@@ -664,12 +731,12 @@ export class FacebookService
       this.state.facebookPages.find(p => p.id === this.state.settings.pageId);
 
     // determine the chat url
-    if (page && page.category === 'Gaming Video Creator') {
+    if (page && page.category === 'Gaming video creator') {
       // GVC pages have a specific chat url
       return `https://www.facebook.com/live/producer/dashboard/${this.state.videoId}/COMMENTS/`;
     } else if (page && this.state.settings.game) {
       // if it's not a GVC page but the game is selected then use a legacy chatUrl
-      return 'https://www.facebook.com/gaming/streamer/chat/';
+      return `https://www.facebook.com/gaming/streamer/chat?page=${page.id}`;
     } else {
       // in other cases we can use only read-only chat
       const token = this.views.getDestinationToken(
@@ -686,16 +753,14 @@ export class FacebookService
   }
 
   createFBPage() {
-    electron.remote.shell.openExternal(
-      'https://www.facebook.com/gaming/pages/create?ref=streamlabs',
-    );
+    remote.shell.openExternal('https://www.facebook.com/gaming/pages/create?ref=streamlabs');
     this.windowsService.actions.closeChildWindow();
   }
 
   private async fetchPages(): Promise<IFacebookPage[]> {
     return (
       await this.requestFacebook<{ data: IFacebookPage[] }>(
-        `${this.apiBase}/me/accounts?limit=50`,
+        `${this.apiBase}/me/accounts?limit=100`,
         this.oauthToken,
       )
     ).data;

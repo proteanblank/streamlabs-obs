@@ -1,11 +1,11 @@
-import { SpectronClient } from 'spectron';
 import { getClient, select, TSelectorOrEl } from '../core';
+import { sleep } from '../../sleep';
 
 /**
  * A base class for all input controllers
  */
 export abstract class BaseInputController<TValue> {
-  protected client: SpectronClient;
+  protected client: WebdriverIO.Browser;
 
   constructor(private selectorOrEl: TSelectorOrEl, public name: string) {}
 
@@ -19,12 +19,12 @@ export abstract class BaseInputController<TValue> {
   /**
    * Set the input value
    */
-  abstract async setValue(value: TValue): Promise<string | Error | void>;
+  abstract setValue(value: TValue): Promise<string | Error | void>;
 
   /**
    * Get the current input value
    */
-  abstract async getValue(): Promise<TValue>;
+  abstract getValue(): Promise<TValue>;
 
   /**
    * Set the display value
@@ -70,8 +70,17 @@ export async function setInputValue(selectorOrEl: TSelectorOrEl, value: string |
   await ((client.keys(['Control', 'a']) as any) as Promise<any>); // select all
   await ((client.keys('Control') as any) as Promise<any>); // release ctrl key
   await ((client.keys('Backspace') as any) as Promise<any>); // clear
+
   await $el.click(); // click again if it's a list input
-  await ((client.keys(String(value)) as any) as Promise<any>); // type text
+  await sendKeys(String(value)); // type text
+}
+
+async function sendKeys(keys: string) {
+  const client = getClient();
+  const keyList = keys.split('');
+  for (const key of keyList) {
+    await ((client.keys(key) as any) as Promise<any>);
+  }
 }
 
 export type TFiledSetterFn<TControllerType extends BaseInputController<any>> = (

@@ -9,6 +9,7 @@
   "has gifted a sub (%{tier}) to": "已将一个订阅 (%{tier}) 赠予",
   "has resubscribed (%{tier}) for %{months} months": "已再订阅 (%{tier}) %{months} 个月",
   "has subscribed (%{tier})": "已订阅 (%{tier})",
+  "has converted from a Prime Gaming sub to a %{tier} sub": "已从 Prime Gaming 订阅转换为 %{tier} 订阅",
   "has subscribed": "已订阅",
   "has used": "已使用",
   "has hosted you with %{viewers} viewers": "已与 %{viewers} 名观众一同招待您",
@@ -18,6 +19,7 @@
   "Tier 2": "级别 2",
   "Tier 3": "级别 3",
   "Prime": "Prime",
+  "Ultra": "Ultra",
   "has become a member": "已成为会员",
   "has been a member for %{months} months": "已成为会员 %{months} 个月",
   "has liked": "已赞",
@@ -73,6 +75,10 @@
   "Safe Mode is Enabled": "安全模式已启用",
   "Disable Safe Mode": "禁用安全模式",
   "Something went wrong disabling Safe Mode": "禁用安全模式时出现问题",
-  "Automatically disable Safe Mode": "Automatically disable Safe Mode",
-  "Disable after <duration></duration> minutes": "Disable after <duration></duration> minutes"
+  "Automatically disable Safe Mode": "自动禁用安全模式",
+  "Disable after <duration></duration> minutes": "<duration></duration> 分钟后禁用",
+  "has resubscribed": "已重新订阅",
+  "has gifted a sub to": "已将订阅赠送给",
+  "has resubscribed for %{streak} months in a row! (%{months} total)": "已重新订阅连续 %{streak} 个月！（总计 %{months}）",
+  "has resubscribed for %{months} months": "已重新订阅 %{months} 个月"
 }

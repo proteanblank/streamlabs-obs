@@ -2,12 +2,13 @@ import { StatefulService, mutation } from 'services/core';
 import * as obs from '../../obs-api';
 import fs from 'fs';
 import util from 'util';
-import electron from 'electron';
 import path from 'path';
 import { getChecksum } from 'util/requests';
 import { byOS, OS } from 'util/operating-systems';
 import { Inject } from 'services/core/injector';
 import { UsageStatisticsService } from 'services/usage-statistics';
+import * as remote from '@electron/remote';
+import { Subject } from 'rxjs';
 
 const PLUGIN_PLIST_PATH =
   '/Library/CoreMediaIO/Plug-Ins/DAL/vcam-plugin.plugin/Contents/Info.plist';
@@ -29,6 +30,8 @@ export class VirtualWebcamService extends StatefulService<IVirtualWebcamServiceS
   @Inject() usageStatisticsService: UsageStatisticsService;
 
   static initialState: IVirtualWebcamServiceState = { running: false };
+
+  runningChanged = new Subject<boolean>();
 
   getInstallStatus(): Promise<EVirtualWebcamPluginInstallStatus> {
     return byOS({
@@ -61,8 +64,12 @@ export class VirtualWebcamService extends StatefulService<IVirtualWebcamServiceS
           });
       },
       [OS.Windows]: async () => {
-        if (obs.NodeObs.OBS_service_isVirtualCamPluginInstalled()) {
+        const result = obs.NodeObs.OBS_service_isVirtualCamPluginInstalled();
+
+        if (result === obs.EVcamInstalledStatus.Installed) {
           return EVirtualWebcamPluginInstallStatus.Installed;
+        } else if (result === obs.EVcamInstalledStatus.LegacyInstalled) {
+          return EVirtualWebcamPluginInstallStatus.Outdated;
         } else {
           return EVirtualWebcamPluginInstallStatus.NotPresent;
         }
@@ -85,6 +92,7 @@ export class VirtualWebcamService extends StatefulService<IVirtualWebcamServiceS
     obs.NodeObs.OBS_service_startVirtualWebcam();
 
     this.SET_RUNNING(true);
+    this.runningChanged.next(true);
 
     this.usageStatisticsService.recordFeatureUsage('VirtualWebcam');
   }
@@ -96,10 +104,11 @@ export class VirtualWebcamService extends StatefulService<IVirtualWebcamServiceS
     obs.NodeObs.OBS_service_removeVirtualWebcam();
 
     this.SET_RUNNING(false);
+    this.runningChanged.next(false);
   }
 
   private getCurrentChecksum() {
-    const internalPlistPath = path.join(electron.remote.app.getAppPath(), INTERNAL_PLIST_PATH);
+    const internalPlistPath = path.join(remote.app.getAppPath(), INTERNAL_PLIST_PATH);
     return getChecksum(internalPlistPath);
   }
 

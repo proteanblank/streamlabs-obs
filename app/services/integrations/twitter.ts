@@ -3,12 +3,12 @@ import { PersistentStatefulService } from 'services/core/persistent-stateful-ser
 import { Inject } from 'services/core/injector';
 import { authorizedHeaders, jfetch } from 'util/requests';
 import { mutation, ViewHandler } from 'services/core/stateful-service';
-import electron from 'electron';
 import { HostsService } from 'services/hosts';
 import { UserService } from 'services/user';
 import { $t, I18nService } from 'services/i18n';
 import uuid from 'uuid/v4';
 import { throwStreamError } from '../streaming/stream-error';
+import * as remote from '@electron/remote';
 
 interface ITwitterServiceState {
   linked: boolean;
@@ -121,28 +121,13 @@ export class TwitterService extends PersistentStatefulService<ITwitterServiceSta
     });
   }
 
-  async postTweet(tweet: string) {
-    const host = this.hostsService.streamlabs;
-    const url = `https://${host}/api/v5/slobs/twitter/tweet`;
-    const headers = authorizedHeaders(this.userService.apiToken);
-    headers.append('Content-Type', 'application/json');
-    const request = new Request(url, {
-      headers,
-      method: 'POST',
-      body: JSON.stringify({ tweet }),
-    });
-    return jfetch(request).catch(e =>
-      throwStreamError('TWEET_FAILED', e, e.result?.error || $t('Could not connect to Twitter')),
-    );
-  }
-
   openLinkTwitterDialog() {
     if (this.authWindowOpen) return;
 
     this.authWindowOpen = true;
     const partition = `persist:${uuid()}`;
 
-    const twitterWindow = new electron.remote.BrowserWindow({
+    const twitterWindow = new remote.BrowserWindow({
       width: 600,
       height: 800,
       alwaysOnTop: false,
@@ -150,7 +135,6 @@ export class TwitterService extends PersistentStatefulService<ITwitterServiceSta
       webPreferences: {
         partition,
         nodeIntegration: false,
-        nativeWindowOpen: true,
         sandbox: true,
       },
     });
@@ -196,8 +180,13 @@ export class TwitterView extends ViewHandler<ITwitterServiceState> {
 
   get url() {
     let url = `${this.state.creatorSiteUrl}/home`;
-    if (!this.state.creatorSiteOnboardingComplete && this.userView.platform.type === 'twitch') {
-      url = `https://twitch.tv/${this.userView.platform.username}`;
+    if (!this.state.creatorSiteOnboardingComplete) {
+      if (this.userView.platform.type === 'twitch') {
+        url = `https://twitch.tv/${this.userView.platform.username}`;
+      }
+      if (this.userView.platform.type === 'trovo') {
+        url = `https://trovo.live/${this.userView.platform.username}`;
+      }
     }
     return url;
   }

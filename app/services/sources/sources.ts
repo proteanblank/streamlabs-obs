@@ -2,16 +2,17 @@ import * as fs from 'fs';
 import Vue from 'vue';
 import { Subject } from 'rxjs';
 import cloneDeep from 'lodash/cloneDeep';
-import { IObsListOption, TObsValue } from 'components/obs/inputs/ObsInput';
+import { IObsListOption, TObsValue, IObsListInput } from 'components/obs/inputs/ObsInput';
 import { mutation, StatefulService, ViewHandler } from 'services/core/stateful-service';
 import * as obs from '../../../obs-api';
+import { InitAfter } from 'services/core';
 import { Inject } from 'services/core/injector';
 import namingHelpers from 'util/NamingHelpers';
 import { WindowsService } from 'services/windows';
 import { WidgetDisplayData, WidgetsService, WidgetType } from 'services/widgets';
 import { DefaultManager } from './properties-managers/default-manager';
 import { WidgetManager } from './properties-managers/widget-manager';
-import { ISceneItem, Scene, ScenesService } from 'services/scenes';
+import { ISceneItem, ScenesService } from 'services/scenes';
 import { StreamlabelsManager } from './properties-managers/streamlabels-manager';
 import { PlatformAppManager } from './properties-managers/platform-app-manager';
 import { UserService } from 'services/user';
@@ -36,14 +37,19 @@ import { IconLibraryManager } from './properties-managers/icon-library-manager';
 import { assertIsDefined } from 'util/properties-type-guards';
 import { UsageStatisticsService } from 'services/usage-statistics';
 import { SourceFiltersService } from 'services/source-filters';
-import { VideoService } from 'services/video';
+import { VideoSettingsService } from 'services/settings-v2';
 import { CustomizationService } from '../customization';
 import { EAvailableFeatures, IncrementalRolloutService } from '../incremental-rollout';
+import { EMonitoringType, EDeinterlaceMode, EDeinterlaceFieldOrder } from '../../../obs-api';
+import { GuestCamService } from 'services/guest-cam';
+
+export { EDeinterlaceMode, EDeinterlaceFieldOrder } from '../../../obs-api';
 
 const AudioFlag = obs.ESourceOutputFlags.Audio;
 const VideoFlag = obs.ESourceOutputFlags.Video;
 const AsyncFlag = obs.ESourceOutputFlags.Async;
 const DoNotDuplicateFlag = obs.ESourceOutputFlags.DoNotDuplicate;
+const ForceUiRefresh = obs.ESourceOutputFlags.ForceUiRefresh;
 
 export const PROPERTIES_MANAGER_TYPES = {
   default: DefaultManager,
@@ -86,6 +92,9 @@ export const windowsSources: TSourceType[] = [
   'ovrstream_dc_source',
   'vlc_source',
   'soundtrack_source',
+  'mediasoupconnector',
+  'wasapi_process_output_capture',
+  'spout_capture',
 ];
 
 /**
@@ -105,10 +114,12 @@ export const macSources: TSourceType[] = [
   'display_capture',
   'audio_line',
   'ndi_source',
+  'mac_screen_capture',
   'vlc_source',
   'window_capture',
   'syphon-input',
   'decklink-input',
+  'mediasoupconnector',
 ];
 
 class SourcesViews extends ViewHandler<ISourcesState> {
@@ -146,8 +157,18 @@ class SourcesViews extends ViewHandler<ISourcesState> {
     });
     return sourceModels.map(sourceModel => this.getSource(sourceModel.sourceId)!);
   }
+
+  getSourcesByType(type: TSourceType) {
+    return this.sources.filter(s => s.type === type);
+  }
+
+  suggestName(name?: string): string {
+    if (!name) return '';
+    return namingHelpers.suggestName(name, (name: string) => this.getSourcesByName(name).length);
+  }
 }
 
+@InitAfter('VideoSettingsService')
 export class SourcesService extends StatefulService<ISourcesState> {
   static initialState = {
     sources: {},
@@ -169,9 +190,12 @@ export class SourcesService extends StatefulService<ISourcesState> {
   @Inject() private defaultHardwareService: DefaultHardwareService;
   @Inject() private usageStatisticsService: UsageStatisticsService;
   @Inject() private sourceFiltersService: SourceFiltersService;
-  @Inject() private videoService: VideoService;
+  @Inject() private videoSettingsService: VideoSettingsService;
   @Inject() private customizationService: CustomizationService;
   @Inject() private incrementalRolloutService: IncrementalRolloutService;
+  @Inject() private guestCamService: GuestCamService;
+
+  sourceDisplayData = SourceDisplayData(); // cache source display data
 
   get views() {
     return new SourcesViews(this.state);
@@ -210,6 +234,8 @@ export class SourcesService extends StatefulService<ISourcesState> {
     channel?: number;
     isTemporary?: boolean;
     propertiesManagerType?: TPropertiesManager;
+    deinterlaceMode?: EDeinterlaceMode;
+    deinterlaceFieldOrder?: EDeinterlaceFieldOrder;
   }) {
     const id = addOptions.id;
     const sourceModel: ISource = {
@@ -224,6 +250,7 @@ export class SourcesService extends StatefulService<ISourcesState> {
       video: false,
       async: false,
       doNotDuplicate: false,
+      forceUiRefresh: false,
 
       configurable: addOptions.configurable,
 
@@ -233,6 +260,12 @@ export class SourcesService extends StatefulService<ISourcesState> {
 
       muted: false,
       channel: addOptions.channel,
+
+      forceHidden: false,
+      forceMuted: false,
+
+      deinterlaceMode: addOptions.deinterlaceMode,
+      deinterlaceFieldOrder: addOptions.deinterlaceFieldOrder,
     };
 
     if (addOptions.isTemporary) {
@@ -255,7 +288,10 @@ export class SourcesService extends StatefulService<ISourcesState> {
   private UPDATE_SOURCE(sourcePatch: TPatch<ISource>) {
     if (this.state.sources[sourcePatch.id]) {
       Object.assign(this.state.sources[sourcePatch.id], sourcePatch);
+    } else if (this.state.temporarySources[sourcePatch.id]) {
+      Object.assign(this.state.temporarySources[sourcePatch.id], sourcePatch);
     } else {
+      this.state.temporarySources[sourcePatch.id] = {} as ISource;
       Object.assign(this.state.temporarySources[sourcePatch.id], sourcePatch);
     }
   }
@@ -276,14 +312,30 @@ export class SourcesService extends StatefulService<ISourcesState> {
 
     const obsInput = obs.InputFactory.create(type, id, obsInputSettings);
 
+    // For Guest Cam, we default sources to monitor so the streamer can hear guests
+    if (type === 'mediasoupconnector' && !options.audioSettings?.monitoringType) {
+      options.audioSettings ??= {};
+      options.audioSettings.monitoringType = EMonitoringType.MonitoringOnly;
+    }
+
     this.addSource(obsInput, name, options);
 
     if (
       this.defaultHardwareService.state.defaultVideoDevice === obsInputSettings.video_device_id &&
-      this.defaultHardwareService.state.presetFilter !== ''
+      this.defaultHardwareService.state.presetFilter !== '' &&
+      this.defaultHardwareService.state.presetFilter !== 'none'
     ) {
       this.sourceFiltersService.addPresetFilter(id, this.defaultHardwareService.state.presetFilter);
     }
+
+    if (
+      this.defaultHardwareService.state.defaultVideoDevice === obsInputSettings.device &&
+      this.defaultHardwareService.state.presetFilter !== '' &&
+      this.defaultHardwareService.state.presetFilter !== 'none'
+    ) {
+      this.sourceFiltersService.addPresetFilter(id, this.defaultHardwareService.state.presetFilter);
+    }
+
     return this.views.getSource(id)!;
   }
 
@@ -294,21 +346,30 @@ export class SourcesService extends StatefulService<ISourcesState> {
     const id = obsInput.name;
     const type: TSourceType = obsInput.id as TSourceType;
     const managerType = options.propertiesManager || 'default';
+    const width = options?.display
+      ? this.videoSettingsService.baseResolutions[options?.display].baseWidth
+      : obsInput.width;
+    const height = options?.display
+      ? this.videoSettingsService.baseResolutions[options?.display].baseHeight
+      : obsInput.height;
+
     this.ADD_SOURCE({
       id,
       name,
       type,
-      width: obsInput.width,
-      height: obsInput.height,
+      width,
+      height,
       configurable: obsInput.configurable,
       channel: options.channel,
       isTemporary: options.isTemporary,
       propertiesManagerType: managerType,
+      deinterlaceMode: options.deinterlaceMode || EDeinterlaceMode.Disable,
+      deinterlaceFieldOrder: options.deinterlaceFieldOrder || EDeinterlaceFieldOrder.Top,
     });
     const source = this.views.getSource(id)!;
     const muted = obsInput.muted;
     this.UPDATE_SOURCE({ id, muted });
-    this.updateSourceFlags(source.state, obsInput.outputFlags, true);
+    this.updateSourceFlags(source, obsInput.outputFlags, true);
 
     if (type === 'ndi_source') {
       this.usageStatisticsService.recordFeatureUsage('NDI');
@@ -340,6 +401,8 @@ export class SourcesService extends StatefulService<ISourcesState> {
       this.usageStatisticsService.recordFeatureUsage('DisplayCapture');
     } else if (type === 'game_capture') {
       this.usageStatisticsService.recordFeatureUsage('GameCapture');
+    } else if (type === 'spout_capture') {
+      this.usageStatisticsService.recordFeatureUsage('SpoutCapture');
     }
 
     const managerKlass = PROPERTIES_MANAGER_TYPES[managerType];
@@ -348,10 +411,40 @@ export class SourcesService extends StatefulService<ISourcesState> {
       type: managerType,
     };
 
+    // Needs to happen after properties manager creation, otherwise we can't fetch props
+    if (type === 'wasapi_input_capture') {
+      const props = source.getPropertiesFormData();
+      const deviceProp = props.find(p => p.name === 'device_id');
+
+      if (deviceProp && deviceProp.value === 'default') {
+        const defaultDeviceNameProp = props.find(p => p.name === 'device_name');
+
+        if (defaultDeviceNameProp) {
+          this.usageStatisticsService.recordAnalyticsEvent('MicrophoneUse', {
+            device: defaultDeviceNameProp.description,
+          });
+        }
+      } else if (deviceProp && deviceProp.type === 'OBS_PROPERTY_LIST') {
+        const deviceOption = (deviceProp as IObsListInput<string>).options.find(
+          opt => opt.value === deviceProp.value,
+        );
+
+        if (deviceOption) {
+          this.usageStatisticsService.recordAnalyticsEvent('MicrophoneUse', {
+            device: deviceOption.description,
+          });
+        }
+      }
+    }
+
     this.sourceAdded.next(source.state);
 
     if (options.audioSettings) {
       this.audioService.views.getSource(id).setSettings(options.audioSettings);
+    }
+
+    if (type === 'mediasoupconnector' && options.guestCamStreamId) {
+      this.guestCamService.setGuestSource(options.guestCamStreamId, id);
     }
   }
 
@@ -429,13 +522,6 @@ export class SourcesService extends StatefulService<ISourcesState> {
     return null;
   }
 
-  suggestName(name: string): string {
-    return namingHelpers.suggestName(
-      name,
-      (name: string) => this.views.getSourcesByName(name).length,
-    );
-  }
-
   private onSceneItemRemovedHandler(sceneItemState: ISceneItem) {
     // remove source if it has been removed from the all scenes
     const source = this.views.getSource(sceneItemState.sourceId);
@@ -470,12 +556,12 @@ export class SourcesService extends StatefulService<ISourcesState> {
       resolvedSettings.video_device_id = this.defaultHardwareService.state.defaultVideoDevice;
     }
 
-    // TODO: Specifically for TikTok, we don't use auto mode on game capture
-    // for portrait resolutions, because auto mode will distort the game.
-    // We should remove this change when the backend team makes a change on their
-    // end to better scale the game capture in auto mode.
-    if (type === 'game_capture' && this.videoService.baseHeight > this.videoService.baseWidth) {
-      resolvedSettings.capture_mode = 'any_fullscreen';
+    if (
+      type === 'av_capture_input' &&
+      resolvedSettings.device === void 0 &&
+      this.defaultHardwareService.state.defaultVideoDevice
+    ) {
+      resolvedSettings.device = this.defaultHardwareService.state.defaultVideoDevice;
     }
 
     return resolvedSettings;
@@ -485,9 +571,9 @@ export class SourcesService extends StatefulService<ISourcesState> {
     const obsAvailableTypes = obs.InputFactory.types();
     const allowlistedTypes: IObsListOption<TSourceType>[] = [
       { description: 'Image', value: 'image_source' },
-      { description: 'Color Source', value: 'color_source' },
+      { description: 'Color Block', value: 'color_source' },
       { description: 'Browser Source', value: 'browser_source' },
-      { description: 'Media Source', value: 'ffmpeg_source' },
+      { description: 'Media File', value: 'ffmpeg_source' },
       { description: 'Image Slide Show', value: 'slideshow' },
       { description: 'Text (GDI+)', value: 'text_gdiplus' },
       { description: 'Text (FreeType 2)', value: 'text_ft2_source' },
@@ -501,6 +587,7 @@ export class SourcesService extends StatefulService<ISourcesState> {
       { description: 'NDI Source', value: 'ndi_source' },
       { description: 'OpenVR Capture', value: 'openvr_capture' },
       { description: 'Screen Capture', value: 'screen_capture' },
+      { description: 'macOS Screen Capture', value: 'mac_screen_capture' },
       { description: 'LIV Client Capture', value: 'liv_capture' },
       { description: 'OvrStream', value: 'ovrstream_dc_source' },
       { description: 'VLC Source', value: 'vlc_source' },
@@ -509,6 +596,9 @@ export class SourcesService extends StatefulService<ISourcesState> {
       { description: 'Video Capture Device', value: 'av_capture_input' },
       { description: 'Display Capture', value: 'display_capture' },
       { description: 'Soundtrack source', value: 'soundtrack_source' },
+      { description: 'Collab Cam', value: 'mediasoupconnector' },
+      { description: 'Application Audio Capture (BETA)', value: 'wasapi_process_output_capture' },
+      { description: 'Spout2 capture', value: 'spout_capture' },
     ];
 
     const availableAllowlistedTypes = allowlistedTypes.filter(type =>
@@ -534,28 +624,45 @@ export class SourcesService extends StatefulService<ISourcesState> {
       if (source.width !== info.width || source.height !== info.height) {
         const size = { id: source.sourceId, width: info.width, height: info.height };
         this.UPDATE_SOURCE(size);
+        this.sourceUpdated.next(source.getModel());
       }
       this.updateSourceFlags(source, info.flags);
     });
   }
 
-  private updateSourceFlags(source: ISource, flags: number, doNotEmit?: boolean) {
+  private updateSourceFlags(source: Source, flags: number, doNotEmit?: boolean) {
     const audio = !!(AudioFlag & flags);
     const video = !!(VideoFlag & flags);
     const async = !!(AsyncFlag & flags);
     const doNotDuplicate = !!(DoNotDuplicateFlag & flags);
+    const forceUiRefresh = !!(ForceUiRefresh & flags);
 
-    if (source.audio !== audio || source.video !== video) {
-      this.UPDATE_SOURCE({ audio, video, async, doNotDuplicate, id: source.sourceId });
+    if (
+      source.audio !== audio ||
+      source.video !== video ||
+      source.forceUiRefresh !== forceUiRefresh
+    ) {
+      this.UPDATE_SOURCE({
+        audio,
+        video,
+        async,
+        doNotDuplicate,
+        forceUiRefresh,
+        id: source.sourceId,
+      });
 
-      if (!doNotEmit) this.sourceUpdated.next(source);
+      if (!doNotEmit) this.sourceUpdated.next(source.getModel());
     }
   }
 
   setMuted(id: string, muted: boolean) {
     const source = this.views.getSource(id);
     if (!source) return;
-    source.getObsInput().muted = muted;
+
+    // Only update in OBS if forceMuted is false
+    if (!source.forceMuted) {
+      source.getObsInput().muted = muted;
+    }
     this.UPDATE_SOURCE({ id, muted });
     this.sourceUpdated.next(source.state);
   }
@@ -579,6 +686,7 @@ export class SourcesService extends StatefulService<ISourcesState> {
     if (!source) return;
 
     if (source.type === 'screen_capture') return this.showScreenCaptureProperties(source);
+    if (source.type === 'mediasoupconnector') return this.showGuestCamProperties(source);
 
     const propertiesManagerType = source.getPropertiesManagerType();
 
@@ -592,23 +700,24 @@ export class SourcesService extends StatefulService<ISourcesState> {
 
     // uncomment the source type to use it's React version
     const reactSourceProps: TSourceType[] = [
+      'color_source',
       // 'image_source',
-      // 'color_source',
-      // 'browser_source',
+      'browser_source',
       // 'slideshow',
-      // 'ffmpeg_source',
+      'ffmpeg_source',
       // 'text_gdiplus',
       // 'text_ft2_source',
       // 'monitor_capture',
       // 'window_capture',
-      // 'game_capture',
+      'game_capture',
       // 'dshow_input',
+      'dshow_input',
       // 'wasapi_input_capture',
       // 'wasapi_output_capture',
       // 'decklink-input',
       // 'scene',
       // 'ndi_source',
-      // 'openvr_capture',
+      'openvr_capture',
       // 'screen_capture',
       // 'liv_capture',
       // 'ovrstream_dc_source',
@@ -656,11 +765,11 @@ export class SourcesService extends StatefulService<ISourcesState> {
       // StarsGoal
       // SubGoal
       // SubscriberGoal
-      // ChatBox
+      'ChatBox',
       // ChatHighlight
       // Credits
-      // DonationTicker
-      // EmoteWall
+      'DonationTicker',
+      'EmoteWall',
       // EventList
       // MediaShare
       // Poll
@@ -669,6 +778,8 @@ export class SourcesService extends StatefulService<ISourcesState> {
       // StreamBoss
       // TipJar
       'ViewerCount',
+      'GameWidget',
+      'CustomWidget',
     ];
     const isLegacyAlertbox = this.customizationService.state.legacyAlertbox;
     if (isLegacyAlertbox) reactWidgets = reactWidgets.filter(w => w !== 'AlertBox');
@@ -679,7 +790,7 @@ export class SourcesService extends StatefulService<ISourcesState> {
 
     const defaultVueWindowSize = { width: 920, height: 1024 };
     const defaultReactWindowSize = { width: 600, height: 800 };
-    const widgetInfo = this.widgetsService.widgetsConfig[componentName];
+    const widgetInfo = this.widgetsService.widgetsConfig[WidgetType[componentName]];
     const { width, height } = isReactComponent
       ? widgetInfo.settingsWindowSize || defaultReactWindowSize
       : defaultVueWindowSize;
@@ -688,7 +799,7 @@ export class SourcesService extends StatefulService<ISourcesState> {
       this.windowsService.showWindow({
         componentName: windowComponentName,
         title: $t('Settings for %{sourceName}', {
-          sourceName: WidgetDisplayData(platform.type)[widgetType].name,
+          sourceName: WidgetDisplayData(platform.type)[widgetType]?.name || componentName,
         }),
         queryParams: { sourceId: source.sourceId, widgetType: WidgetType[widgetType] },
         size: {
@@ -757,6 +868,24 @@ export class SourcesService extends StatefulService<ISourcesState> {
         height: 800,
       },
     });
+  }
+
+  showGuestCamProperties(source?: Source) {
+    this.windowsService.showWindow({
+      componentName: 'GuestCamProperties',
+      title: $t('Collab Cam Properties', { sourceName: $t('Collab Cam') }),
+      queryParams: { sourceId: source?.sourceId },
+      size: {
+        width: 850,
+        height: 660,
+      },
+    });
+  }
+
+  showGuestCamPropertiesBySourceId(sourceId: string) {
+    const source = this.views.getSource(sourceId);
+
+    if (source) this.showGuestCamProperties(source);
   }
 
   showShowcase() {

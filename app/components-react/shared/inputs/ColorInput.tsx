@@ -1,8 +1,8 @@
-import React, { ChangeEvent, RefObject, useEffect, useRef, useState } from 'react';
+import React, { ChangeEvent, KeyboardEvent, RefObject, useEffect, useRef, useState } from 'react';
 import { TSlobsInputProps, useInput } from './inputs';
 import { Button, Input, Popover } from 'antd';
 import InputWrapper from './InputWrapper';
-import { omit } from 'lodash';
+import omit from 'lodash/omit';
 import { getOS, OS } from '../../../util/operating-systems';
 import { $t } from '../../../services/i18n';
 import { loadColorPicker } from '../../../util/slow-imports';
@@ -38,6 +38,14 @@ function hexToRGB(hex: string) {
   return { r, g, b };
 }
 
+function hexToRGBA(hex: string) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const a = parseInt(hex.slice(7, 9), 16) / 255;
+  return { r, g, b, a };
+}
+
 function colorToHex(color: string | IRGBAColor) {
   if (typeof color === 'string') return color;
 
@@ -56,7 +64,7 @@ export function ColorInput(p: TSlobsInputProps<{}, string | IRGBAColor>) {
     setTextInputVal(colorToHex(inputAttrs.value));
   }, [inputAttrs.value]);
 
-  // open eydrop picker
+  // open eyedrop picker
   async function eyedrop(e: React.MouseEvent) {
     e.stopPropagation();
     const colorPicker = (await loadColorPicker()).default;
@@ -68,7 +76,7 @@ export function ColorInput(p: TSlobsInputProps<{}, string | IRGBAColor>) {
             inputAttrs.onChange(`#${data.hex}`);
           } else {
             const rgb = hexToRGB(`#${data.hex}`);
-            inputAttrs.onChange({ ...rgb, a: inputAttrs.value.a });
+            inputAttrs.onChange({ ...rgb, a: 1 });
           }
         }
       },
@@ -100,13 +108,49 @@ export function ColorInput(p: TSlobsInputProps<{}, string | IRGBAColor>) {
       ? color.match(/^#(?:[0-9a-fA-F]{8})$/)
       : color.match(/^#(?:[0-9a-fA-F]{3}){1,2}$/);
     if (!isValidColor) return;
-    inputAttrs.onChange(color.toLowerCase());
+
+    const textLength = ev.target.value?.length;
+    handleChangeOBSColor(color, textLength);
   }
 
   function onTextInputBlur() {
     // reset invalid color
     const validColor = colorToHex(inputAttrs.value);
     if (textInputVal !== validColor) setTextInputVal(validColor);
+  }
+
+  function handleChangeOBSColor(color: string, textLength: number) {
+    if (typeof inputAttrs.value === 'string') {
+      inputAttrs.onChange(color.toLowerCase());
+    } else {
+      // Prevent calculating alpha if the user is in the middle of typing
+      // the alpha portion of the hex. In this situation, colors are rendered opaque.
+      if (textLength === 6) {
+        // the user has entered no characters for alpha value
+        const opaqueColor = color.concat('ff');
+        inputAttrs.onChange(opaqueColor.toLowerCase());
+      } else if (textLength === 7) {
+        // the user has entered one character for alpha value
+        const opaqueColor = color.concat('f');
+        inputAttrs.onChange(opaqueColor.toLowerCase());
+      } else {
+        const rgbaColor = hexToRGBA(color);
+        inputAttrs.onChange(rgbaColor);
+      }
+    }
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    // change preview color if hitting enter
+    if (event.key === 'Enter') {
+      // emit onChange if textInput contains a valid color
+      const isValidColor = alphaMode
+        ? textInputVal.match(/^#(?:[0-9a-fA-F]{8})$/)
+        : textInputVal.match(/^#(?:[0-9a-fA-F]{3}){1,2}$/);
+      if (!isValidColor) return;
+
+      handleChangeOBSColor(textInputVal, textInputVal.length);
+    }
   }
 
   const picker =
@@ -130,6 +174,7 @@ export function ColorInput(p: TSlobsInputProps<{}, string | IRGBAColor>) {
           value={textInputVal}
           onChange={onTextInputChange}
           onBlur={onTextInputBlur}
+          onKeyDown={handleKeyDown}
           ref={ref}
           // render color box
           prefix={

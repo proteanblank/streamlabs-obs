@@ -3,18 +3,16 @@ import { ObsGenericSettingsForm, ObsSettingsSection } from './ObsSettings';
 import { $t, I18nService } from '../../../services/i18n';
 import { alertAsync, confirmAsync } from '../../modals';
 import { CheckboxInput, ListInput } from '../../shared/inputs';
-import electron from 'electron';
 import { Services } from '../../service-provider';
 import fs from 'fs';
 import path from 'path';
-import { useVuex } from '../../hooks';
-import { useBinding } from '../../store';
 import { getDefined } from '../../../util/properties-type-guards';
+import { useVuex } from 'components-react/hooks';
+import { useRealmObject } from 'components-react/hooks/realm';
 
 export function GeneralSettings() {
   return (
     <div>
-      <CacheSettings />
       <LanguageSettings />
       <ExtraSettings />
       <ObsGenericSettingsForm />
@@ -23,82 +21,6 @@ export function GeneralSettings() {
 }
 
 GeneralSettings.page = 'General';
-
-function CacheSettings() {
-  const { AppService, CacheUploaderService, CustomizationService } = Services;
-  const [cacheUploading, setCacheUploading] = useState(false);
-  const { enableCrashDumps } = useVuex(() => {
-    return { enableCrashDumps: CustomizationService.state.enableCrashDumps };
-  });
-
-  async function showCacheDir() {
-    await electron.remote.shell.openPath(AppService.appDataDirectory);
-  }
-
-  async function deleteCacheDir() {
-    if (
-      await confirmAsync(
-        $t(
-          'WARNING! You will lose all stream and encoder settings. If you are logged in, your scenes and sources will be restored from the cloud. This cannot be undone.',
-        ),
-      )
-    ) {
-      electron.remote.app.relaunch({ args: ['--clearCacheDir'] });
-      electron.remote.app.quit();
-    }
-  }
-
-  function uploadCacheDir() {
-    if (cacheUploading) return;
-    setCacheUploading(true);
-    CacheUploaderService.uploadCache().then(file => {
-      electron.remote.clipboard.writeText(file);
-      alert(
-        $t(
-          'Your cache directory has been successfully uploaded.  ' +
-            'The file name %{file} has been copied to your clipboard.',
-          { file },
-        ),
-      );
-      setCacheUploading(false);
-    });
-  }
-
-  return (
-    <ObsSettingsSection>
-      <p>
-        {$t(
-          'Deleting your cache directory will cause you to lose some settings. Do not delete your cache directory unless instructed to do so by a Streamlabs staff member.',
-        )}
-      </p>
-      <div className="input-container">
-        <a className="link" onClick={showCacheDir}>
-          <i className="icon-view" /> <span>{$t('Show Cache Directory')}</span>
-        </a>
-      </div>
-      <div className="input-container">
-        <a className="link" onClick={deleteCacheDir}>
-          <i className="icon-trash" />
-          <span>{$t('Delete Cache and Restart')}</span>
-        </a>
-      </div>
-      <div className="input-container">
-        <a className="link" onClick={uploadCacheDir}>
-          <i className="fa fa-upload" /> <span>{$t('Upload Cache to Developers')}</span>
-          {cacheUploading && <i className="fa fa-spinner fa-spin" />}
-        </a>
-      </div>
-      {process.platform === 'win32' && (
-        <CheckboxInput
-          name="enable_dump_upload"
-          label={$t('Enable reporting additional information on a crash (requires restart)')}
-          value={enableCrashDumps}
-          onChange={val => CustomizationService.actions.setSettings({ enableCrashDumps: val })}
-        />
-      )}
-    </ObsSettingsSection>
-  );
-}
 
 function LanguageSettings() {
   const i18nService = I18nService.instance as I18nService;
@@ -129,16 +51,34 @@ function ExtraSettings() {
     OnboardingService,
     WindowsService,
     StreamlabelsService,
+    RecordingModeService,
+    SettingsService,
   } = Services;
   const isLoggedIn = UserService.isLoggedIn;
   const isTwitch = isLoggedIn && getDefined(UserService.platform).type === 'twitch';
   const isFacebook = isLoggedIn && getDefined(UserService.platform).type === 'facebook';
   const isYoutube = isLoggedIn && getDefined(UserService.platform).type === 'youtube';
-  const isRecordingOrStreaming = StreamingService.isStreaming || StreamingService.isRecording;
   const protectedMode = StreamSettingsService.state.protectedModeEnabled;
-  const canRunOptimizer = isTwitch && !isRecordingOrStreaming && protectedMode;
   const disableHAFilePath = path.join(AppService.appDataDirectory, 'HADisable');
   const [disableHA, setDisableHA] = useState(() => fs.existsSync(disableHAFilePath));
+
+  // TODO: unused fields
+  const { isRecordingOrStreaming, recordingMode, isSimpleOutputMode } = useVuex(() => ({
+    isRecordingOrStreaming: StreamingService.isStreaming || StreamingService.isRecording,
+    recordingMode: RecordingModeService.views.isRecordingModeEnabled,
+    isSimpleOutputMode: SettingsService.views.isSimpleOutputMode,
+  }));
+
+  const updateStreamInfoOnLive = useRealmObject(CustomizationService.state).updateStreamInfoOnLive;
+
+  // HDR Settings are not compliant with the auto-optimizer
+  // temporarily disable auto config until migrate to new api
+  const canRunOptimizer = false;
+  // !SettingsService.views.hasHDRSettings &&
+  // isTwitch &&
+  // !isRecordingOrStreaming &&
+  // protectedMode &&
+  // isSimpleOutputMode;
 
   function restartStreamlabelsSession() {
     StreamlabelsService.restartSession().then(result => {
@@ -159,6 +99,8 @@ function ExtraSettings() {
   }
 
   function importFromObs() {
+    // TODO: there's no check that OBS is installed like in Onboarding
+    OnboardingService.actions.setImport('obs');
     OnboardingService.actions.start({ isImport: true });
     WindowsService.actions.closeChildWindow();
   }
@@ -178,21 +120,13 @@ function ExtraSettings() {
     }
   }
 
-  const bind = useBinding({
-    get streamInfoUpdate() {
-      return CustomizationService.state.updateStreamInfoOnLive;
-    },
-    set streamInfoUpdate(value) {
-      CustomizationService.setUpdateStreamInfoOnLive(value);
-    },
-  });
-
   return (
     <>
       <ObsSettingsSection>
         {isLoggedIn && !isFacebook && !isYoutube && (
           <CheckboxInput
-            {...bind.streamInfoUpdate}
+            value={updateStreamInfoOnLive}
+            onChange={val => CustomizationService.actions.setUpdateStreamInfoOnLive(val)}
             label={$t('Confirm stream title and game before going live')}
             name="stream_info_udpate"
           />
@@ -202,6 +136,11 @@ function ExtraSettings() {
           value={disableHA}
           onChange={disableHardwareAcceleration}
           name="disable_ha"
+        />
+        <CheckboxInput
+          label={$t('Disable live streaming features (Recording Only mode)')}
+          value={recordingMode}
+          onChange={RecordingModeService.actions.setRecordingMode}
         />
 
         <div className="actions">

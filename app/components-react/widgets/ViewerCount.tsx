@@ -1,17 +1,11 @@
 import React from 'react';
-import { IWidgetState, useWidget, WidgetModule } from './common/useWidget';
+import { IWidgetCommonState, useWidget, WidgetModule } from './common/useWidget';
 import { WidgetLayout } from './common/WidgetLayout';
 import InputWrapper from '../shared/inputs/InputWrapper';
 import { $t } from '../../services/i18n';
-import {
-  CheckboxInput,
-  ColorInput,
-  createBinding,
-  FontFamilyInput,
-  FontSizeInput,
-} from '../shared/inputs';
+import { CheckboxInput, ColorInput, FontFamilyInput, FontSizeInput } from '../shared/inputs';
 
-interface IViewerCountState extends IWidgetState {
+interface IViewerCountState extends IWidgetCommonState {
   data: {
     settings: {
       font: string;
@@ -21,6 +15,7 @@ interface IViewerCountState extends IWidgetState {
       twitch: boolean;
       youtube: boolean;
       facebook: boolean;
+      trovo: boolean;
     };
   };
 }
@@ -36,6 +31,7 @@ export function ViewerCount() {
             <CheckboxInput label={$t('Twitch Viewers')} {...bind.twitch} />
             <CheckboxInput label={$t('YouTube Viewers')} {...bind.youtube} />
             <CheckboxInput label={$t('Facebook Viewers')} {...bind.facebook} />
+            <CheckboxInput label={$t('Trovo Viewers')} {...bind.trovo} />
           </InputWrapper>
 
           <FontFamilyInput label={$t('Font')} {...bind.font} />
@@ -48,11 +44,6 @@ export function ViewerCount() {
 }
 
 export class ViewerCountModule extends WidgetModule<IViewerCountState> {
-  bind = createBinding(
-    () => this.settings,
-    statePatch => this.updateSettings(statePatch),
-  );
-
   patchAfterFetch(data: any): IViewerCountState {
     // transform platform types to simple booleans
     return {
@@ -62,6 +53,7 @@ export class ViewerCountModule extends WidgetModule<IViewerCountState> {
         twitch: data.settings.types.twitch.enabled,
         youtube: data.settings.types.youtube.enabled,
         facebook: data.settings.types.facebook.enabled,
+        trovo: data.settings.types.trovo.enabled,
       },
     };
   }
@@ -74,6 +66,7 @@ export class ViewerCountModule extends WidgetModule<IViewerCountState> {
         youtube: { enabled: settings.youtube },
         twitch: { enabled: settings.twitch },
         facebook: { enabled: settings.facebook },
+        trovo: { enabled: settings.trovo },
       },
     };
   }

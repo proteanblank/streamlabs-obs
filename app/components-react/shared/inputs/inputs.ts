@@ -3,16 +3,17 @@
  */
 import React, { useEffect, useContext, ChangeEvent, FocusEvent, useCallback, useRef } from 'react';
 import { FormContext } from './Form';
-import { useDebounce, useOnCreate, useForceUpdate } from '../../hooks';
+import { useDebounce, useThrottle } from '../../hooks';
+import { useOnCreate, useForceUpdate, createFormBinding } from 'slap';
 import uuid from 'uuid';
 import { FormItemProps } from 'antd/lib/form';
 import { CheckboxChangeEvent } from 'antd/lib/checkbox';
 import { $t } from '../../../services/i18n';
 import pick from 'lodash/pick';
 import isEqual from 'lodash/isEqual';
-import * as InputComponents from './index';
+import * as InputComponents from './inputList';
 
-type TInputType =
+export type TInputType =
   | 'code'
   | 'color'
   | 'card'
@@ -21,6 +22,7 @@ type TInputType =
   | 'number'
   | 'toggle'
   | 'checkbox'
+  | 'autocomplete'
   | 'list'
   | 'mediaurl'
   | 'audiourl'
@@ -30,7 +32,8 @@ type TInputType =
   | 'slider'
   | 'image'
   | 'time'
-  | 'file';
+  | 'file'
+  | 'checkboxGroup';
 
 export type TInputLayout = 'horizontal' | 'vertical' | 'inline';
 
@@ -45,7 +48,9 @@ export interface IInputCommonProps<TValue> {
   max?: number;
   placeholder?: string;
   disabled?: boolean;
+  readOnly?: boolean;
   debounce?: number;
+  throttle?: number;
   /**
    * true if the input is in the uncontrolled mode
    * all input components except text inputs are controlled by default
@@ -174,6 +179,7 @@ export function useInput<
     inputPropsRef.current.onChange && inputPropsRef.current.onChange(newVal);
   }
   const emitChangeDebounced = useDebounce(inputProps.debounce, emitChange);
+  const emitChangeThrottled = useThrottle(inputProps.throttle, emitChange);
 
   // create onChange handler
   const onChange = useCallback((newVal: TValue) => {
@@ -192,6 +198,8 @@ export function useInput<
     if (!props.onChange) return;
     if (props.debounce) {
       emitChangeDebounced(newVal);
+    } else if (props.throttle) {
+      emitChangeThrottled(newVal);
     } else {
       emitChange(newVal);
     }
@@ -220,6 +228,7 @@ export function useInput<
       'labelCol',
       'wrapperCol',
       'disabled',
+      'readOnly',
       'nowrap',
       'layout',
       'rules',
@@ -237,7 +246,7 @@ export function useInput<
 
   // pick props for the input element
   const inputAttrs = {
-    ...(pick(inputProps, 'disabled', 'placeholder', 'size', antFeatures || []) as {}),
+    ...(pick(inputProps, 'disabled', 'readOnly', 'placeholder', 'size', antFeatures || []) as {}),
     ...dataAttrs,
     'data-role': 'input',
     name: inputId,
@@ -256,6 +265,7 @@ export function useInput<
     forceUpdate,
     setLocalValue,
     emitChange,
+    form,
   };
 }
 
@@ -319,6 +329,7 @@ export function useTextInput<
 }
 
 /**
+ * @deprecated use bindFormState instead
  * 2-way binding util for inputs
  *
  * @example
@@ -339,64 +350,42 @@ export function useTextInput<
  */
 export function createBinding<TState extends object, TExtraProps extends object = {}>(
   stateGetter: TState | (() => TState),
-  stateSetter?: (newTarget: Partial<TState>) => unknown,
+  stateSetter: (newTarget: Partial<TState>) => unknown,
   extraPropsGenerator?: (fieldName: keyof TState) => TExtraProps,
-): TBindings<TState, TExtraProps> {
-  function getState(): TState {
-    return typeof stateGetter === 'function'
-      ? (stateGetter as Function)()
-      : (stateGetter as TState);
-  }
-
-  const metadata = {
-    _proxyName: 'Binding',
-    _binding: {
-      id: `binding__${uuid()}`,
-      dependencies: {} as Record<string, unknown>,
-    },
-  };
-
-  return (new Proxy(metadata, {
-    get(t, fieldName: string) {
-      if (fieldName in metadata) return metadata[fieldName];
-      const fieldValue = getState()[fieldName];
-      // register the fieldName in the dependencies list
-      // that helps keep this binding up to date when use it inside ReduxModules
-      metadata._binding.dependencies[fieldName] = fieldValue;
-      const extraProps = extraPropsGenerator ? extraPropsGenerator(fieldName as keyof TState) : {};
-      return {
-        name: fieldName,
-        value: fieldValue,
-        onChange(newVal: unknown) {
-          const state = getState();
-          // if the state object has a defined setter than use the local setter
-          if (Object.getOwnPropertyDescriptor(state, fieldName)?.set) {
-            state[fieldName] = newVal;
-          } else if (stateSetter) {
-            stateSetter({ ...state, [fieldName]: newVal });
-          }
-        },
-        ...extraProps,
-      };
-    },
-  }) as unknown) as TBindings<TState, TExtraProps>;
+) {
+  return createFormBinding(stateGetter, stateSetter, extraPropsGenerator).proxy;
 }
 
-export type TBindings<TState extends Object, TExtraProps extends Object = {}> = {
+type TFormBindings<TState, TExtraProps = {}> = {
   [K in keyof TState]: {
     name: K;
     value: TState[K];
     onChange: (newVal: TState[K]) => unknown;
   };
 } &
-  TExtraProps & {
-    _proxyName: 'Binding';
-    _binding: {
-      id: string;
-      dependencies: Record<keyof TState, unknown>;
-      clone: () => TBindings<TState, TExtraProps>;
+  TExtraProps;
+
+export function bindFormState<TFormState, TExtraProps = {}>(
+  getFormState: () => TFormState,
+  updateFormState: (statePatch: Partial<TFormState>) => unknown,
+  extraProps?: TExtraProps,
+) {
+  const formState = getFormState();
+  const result = {} as any;
+  for (const fieldName in formState) {
+    result[fieldName] = {
+      name: fieldName,
+      value: formState[fieldName],
+      onChange: (value: any) => {
+        updateFormState({ [fieldName]: value } as Partial<TFormState>);
+      },
     };
-  };
+  }
+
+  extraProps ?? Object.assign(result, extraProps);
+
+  return result as TFormBindings<TFormState, TExtraProps>;
+}
 
 function createValidationRules(type: TInputType, inputProps: IInputCommonProps<unknown>) {
   const rules = inputProps.rules ? [...inputProps.rules] : [];

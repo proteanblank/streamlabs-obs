@@ -10,32 +10,36 @@ import { HostsService } from 'services/hosts';
 import { Inject } from 'services/core/injector';
 import { authorizedHeaders, jfetch } from 'util/requests';
 import { UserService } from 'services/user';
-import { getAllTags, getStreamTags, TTwitchTag, updateTags } from './twitch/tags';
-import { TTwitchOAuthScope } from './twitch/scopes';
-import { platformAuthorizedRequest, platformRequest } from './utils';
+import { TTwitchOAuthScope, TwitchTagsService } from './twitch/index';
+import { platformAuthorizedRequest } from './utils';
 import { CustomizationService } from 'services/customization';
-import { assertIsDefined } from 'util/properties-type-guards';
 import { IGoLiveSettings } from 'services/streaming';
 import { InheritMutations, mutation } from 'services/core';
-import { throwStreamError, TStreamErrorType } from 'services/streaming/stream-error';
+import { StreamError, throwStreamError, TStreamErrorType } from 'services/streaming/stream-error';
 import { BasePlatformService } from './base-platform';
 import Utils from '../utils';
+import { IVideo } from 'obs-studio-node';
+import { TDisplayType } from 'services/settings-v2';
+import { TOutputOrientation } from 'services/restream';
+import {
+  ITwitchContentClassificationLabelsRootResponse,
+  TwitchContentClassificationService,
+} from './twitch/content-classification';
+import { ENotificationType, NotificationsService } from '../notifications';
+import { $t } from '../i18n';
 
 export interface ITwitchStartStreamOptions {
   title: string;
   game?: string;
-  tags?: TTwitchTag[];
+  video?: IVideo;
+  tags: string[];
+  mode?: TOutputOrientation;
+  contentClassificationLabels: string[];
+  isBrandedContent: boolean;
 }
 
 export interface ITwitchChannelInfo extends ITwitchStartStreamOptions {
   hasUpdateTagsPermission: boolean;
-  availableTags: TTwitchTag[];
-}
-
-interface ITWitchChannelResponse {
-  status: string;
-  game: string;
-  stream_key: string;
 }
 
 /**
@@ -62,9 +66,10 @@ interface ITwitchOAuthValidateResponse {
 interface ITwitchServiceState extends IPlatformState {
   hasUpdateTagsPermission: boolean;
   hasPollsPermission: boolean;
-  availableTags: TTwitchTag[];
   settings: ITwitchStartStreamOptions;
 }
+
+const UNLISTED_GAME_CATEGORY = { id: '0', name: 'Unlisted', box_art_url: '' };
 
 @InheritMutations()
 export class TwitchService
@@ -73,16 +78,22 @@ export class TwitchService
   @Inject() hostsService: HostsService;
   @Inject() userService: UserService;
   @Inject() customizationService: CustomizationService;
+  @Inject() twitchTagsService: TwitchTagsService;
+  @Inject() twitchContentClassificationService: TwitchContentClassificationService;
+  @Inject() notificationsService: NotificationsService;
 
   static initialState: ITwitchServiceState = {
     ...BasePlatformService.initialState,
     hasUpdateTagsPermission: false,
     hasPollsPermission: false,
-    availableTags: [],
     settings: {
       title: '',
       game: '',
+      video: undefined,
+      mode: undefined,
       tags: [],
+      contentClassificationLabels: [],
+      isBrandedContent: false,
     },
   };
 
@@ -109,7 +120,9 @@ export class TwitchService
   };
 
   // Streamlabs Production Twitch OAuth Client ID
-  clientId = '8bmp6j83z5w4mepq0dn0q1a7g186azi';
+  clientId = Utils.shouldUseBeta()
+    ? '3eoucd9qwxqh7pu3l0e3rttomgrov2'
+    : '8bmp6j83z5w4mepq0dn0q1a7g186azi';
 
   init() {
     // prepopulate data to make chat available after app start
@@ -119,13 +132,20 @@ export class TwitchService
 
         // Check for updated polls scopes
         this.validatePollsScope();
+        // Check for updated tags scopes
+        this.validateTagsScope();
       }
     });
   }
 
   get authUrl() {
     const host = this.hostsService.streamlabs;
-    const scopes: TTwitchOAuthScope[] = ['channel_read', 'channel_editor', 'user:edit:broadcast'];
+    const scopes: TTwitchOAuthScope[] = [
+      'channel_read',
+      'channel_editor',
+      'user:edit:broadcast',
+      'channel:manage:broadcast',
+    ];
 
     const query =
       `_=${Date.now()}&skip_splash=true&external=electron&twitch&force_verify&` +
@@ -154,7 +174,11 @@ export class TwitchService
     return this.userService.state.auth?.platforms?.twitch?.username || '';
   }
 
-  async beforeGoLive(goLiveSettings?: IGoLiveSettings) {
+  get tags(): string[] {
+    return this.state.settings.tags;
+  }
+
+  async beforeGoLive(goLiveSettings?: IGoLiveSettings, context?: TDisplayType) {
     if (
       this.streamSettingsService.protectedModeEnabled &&
       this.streamSettingsService.isSafeToModifyStreamKey()
@@ -166,12 +190,15 @@ export class TwitchService
       }
       this.SET_STREAM_KEY(key);
       if (!this.streamingService.views.isMultiplatformMode) {
-        this.streamSettingsService.setSettings({
-          key,
-          platform: 'twitch',
-          streamType: 'rtmp_common',
-          server: 'auto',
-        });
+        this.streamSettingsService.setSettings(
+          {
+            key,
+            platform: 'twitch',
+            streamType: 'rtmp_common',
+            server: 'auto',
+          },
+          context,
+        );
       }
     }
 
@@ -179,19 +206,11 @@ export class TwitchService
       const channelInfo = goLiveSettings?.platforms.twitch;
       if (channelInfo) await this.putChannelInfo(channelInfo);
     }
+
+    this.setPlatformContext('twitch');
   }
 
   async validatePlatform() {
-    const hasScopeCheck = this.hasScope('channel_read')
-      .then(result => {
-        if (!result) return EPlatformCallResult.TwitchScopeMissing;
-        return EPlatformCallResult.Success;
-      })
-      .catch(e => {
-        console.error('Error checking Twitch OAuth scopes', e);
-        return EPlatformCallResult.Error;
-      });
-
     const twitchTwoFactorCheck = this.fetchStreamKey()
       .then(key => {
         return EPlatformCallResult.Success;
@@ -206,7 +225,7 @@ export class TwitchService
         return EPlatformCallResult.Error;
       });
 
-    const results = await Promise.all([hasScopeCheck, twitchTwoFactorCheck]);
+    const results = await Promise.all([twitchTwoFactorCheck]);
     const failedResults = results.filter(result => result !== EPlatformCallResult.Success);
     if (failedResults.length) return failedResults[0];
     return EPlatformCallResult.Success;
@@ -258,33 +277,38 @@ export class TwitchService
    * prepopulate channel info and save it to the store
    */
   async prepopulateInfo(): Promise<void> {
-    const [channelInfo, hasUpdateTagsPermission] = await Promise.all([
-      this.requestTwitch<{ data: { title: string; game_name: string }[] }>(
-        `${this.apiBase}/helix/channels?broadcaster_id=${this.twitchId}`,
-      ).then(json => ({
-        title: json.data[0].title,
-        game: json.data[0].game_name,
-      })),
-      this.getHasUpdateTagsPermission(),
+    const [channelInfo] = await Promise.all([
+      this.requestTwitch<{
+        data: {
+          title: string;
+          game_name: string;
+          is_branded_content: boolean;
+          content_classification_labels: string[];
+        }[];
+      }>(`${this.apiBase}/helix/channels?broadcaster_id=${this.twitchId}`).then(json => {
+        return {
+          title: json.data[0].title,
+          game: json.data[0].game_name,
+          is_branded_content: json.data[0].is_branded_content,
+          content_classification_labels: json.data[0].content_classification_labels,
+        };
+      }),
+      this.requestTwitch<ITwitchContentClassificationLabelsRootResponse>(
+        `${this.apiBase}/helix/content_classification_labels`,
+      ).then(json => this.twitchContentClassificationService.setLabels(json)),
     ]);
 
-    let tags: TTwitchTag[] = [];
-    if (hasUpdateTagsPermission) {
-      [tags] = await Promise.all([this.getStreamTags(), this.getAllTags()]);
-    }
+    const tags: string[] = this.twitchTagsService.views.hasTags
+      ? this.twitchTagsService.views.tags
+      : [];
     this.SET_PREPOPULATED(true);
-    this.SET_STREAM_SETTINGS({ tags, title: channelInfo.title, game: channelInfo.game });
-  }
-
-  @mutation()
-  private SET_AVAILABLE_TAGS(tags: TTwitchTag[]) {
-    this.state.availableTags = tags;
-    this.state.hasUpdateTagsPermission = true;
-  }
-
-  @mutation()
-  private SET_HAS_POLLS_PERMISSION(hasPollsPermission: boolean) {
-    this.state.hasPollsPermission = hasPollsPermission;
+    this.SET_STREAM_SETTINGS({
+      tags,
+      title: channelInfo.title,
+      game: channelInfo.game,
+      isBrandedContent: channelInfo.is_branded_content,
+      contentClassificationLabels: channelInfo.content_classification_labels,
+    });
   }
 
   fetchUserInfo() {
@@ -307,21 +331,86 @@ export class TwitchService
     }).then(json => json.total);
   }
 
-  async putChannelInfo({ title, game, tags = [] }: ITwitchStartStreamOptions): Promise<void> {
-    let gameId;
-    if (game) {
+  async putChannelInfo({
+    title,
+    game,
+    tags = [],
+    contentClassificationLabels = [],
+    isBrandedContent = false,
+  }: ITwitchStartStreamOptions): Promise<void> {
+    let gameId = '';
+    const isUnlisted = game === UNLISTED_GAME_CATEGORY.name;
+    if (isUnlisted) gameId = '0';
+    if (game && !isUnlisted) {
       gameId = await this.requestTwitch<{ data: { id: string }[] }>(
         `${this.apiBase}/helix/games?name=${encodeURIComponent(game)}`,
       ).then(json => json.data[0].id);
     }
-    await Promise.all([
+    this.twitchTagsService.actions.setTags(tags);
+    const hasPermission = await this.hasScope('channel:manage:broadcast');
+    const scopedTags = hasPermission ? tags : undefined;
+
+    // Twitch seems to require you to add a label with disabled to remove it
+    const labels = this.twitchContentClassificationService.options.map(option => ({
+      id: option.value,
+      is_enabled: contentClassificationLabels.includes(option.value),
+    }));
+
+    const updateInfo = async (tags: ITwitchStartStreamOptions['tags'] | undefined) =>
       this.requestTwitch({
         url: `${this.apiBase}/helix/channels?broadcaster_id=${this.twitchId}`,
         method: 'PATCH',
-        body: JSON.stringify({ game_id: gameId, title }),
-      }),
-      this.setStreamTags(tags),
-    ]);
+        body: JSON.stringify({
+          tags,
+          title,
+          game_id: gameId,
+          is_branded_content: isBrandedContent,
+          content_classification_labels: labels,
+        }),
+      });
+
+    // TODO: I would like to extract fn on all this, but the early return makes it tricky, will revisit eventually
+    try {
+      await updateInfo(scopedTags);
+    } catch (e: unknown) {
+      // Full error message from Twitch:
+      // "400 Bad Request One or more tags were not applied because they failed a moderation check: [noob, Twitch]"
+      if (e instanceof StreamError && e.details?.includes('One or more tags were not applied')) {
+        // Remove offending tags by finding the **not-valid JSON** array of tags returned from the response
+        const offendingTagsStr = e.details.match(/moderation check: \[(.+)]$/)?.[1];
+
+        // If they ever change their response format let it blow as before, we can't handle without code updates
+        if (!offendingTagsStr) {
+          throw e;
+        }
+
+        const offendingTags = offendingTagsStr.split(', ').map(str => str.toLowerCase());
+        const newTags = tags.filter(tag => !offendingTags.includes(tag.toLowerCase()));
+
+        // If we fail the second time we're throwing our hands up and let it blow up as before
+        await updateInfo(newTags);
+
+        // Remove the offending tags from their list, they can't use them anyways
+        this.twitchTagsService.actions.setTags(newTags);
+        this.SET_STREAM_SETTINGS({ title, game, tags: newTags });
+
+        // Notify the user of the tags that were removed
+        // TODO: I don't personally like calling Notification code from here
+        this.notificationsService.push({
+          message: $t(
+            'While updating your Twitch channel info, some tags were removed due to moderation rules: %{tags}',
+            { tags: offendingTags.join(', ') },
+          ),
+          playSound: false,
+          type: ENotificationType.WARNING,
+        });
+
+        return;
+      }
+
+      throw e;
+    }
+
     this.SET_STREAM_SETTINGS({ title, game, tags });
   }
 
@@ -329,11 +418,21 @@ export class TwitchService
     const gamesResponse = await platformAuthorizedRequest<{
       data: { id: string; name: string; box_art_url: string }[];
     }>('twitch', `${this.apiBase}/helix/search/categories?query=${searchString}`);
-    if (!gamesResponse.data) return [];
-    return gamesResponse.data.map(g => ({ id: g.id, name: g.name, image: g.box_art_url }));
+    const data = gamesResponse.data || [];
+
+    const shouldIncludeUnlisted =
+      searchString.toLowerCase() === 'unlisted'.substring(0, searchString.length);
+
+    if (shouldIncludeUnlisted) {
+      data.push(UNLISTED_GAME_CATEGORY);
+    }
+
+    return data.map(g => ({ id: g.id, name: g.name, image: g.box_art_url }));
   }
 
   async fetchGame(name: string): Promise<IGame> {
+    if (name === UNLISTED_GAME_CATEGORY.name) return UNLISTED_GAME_CATEGORY;
+
     const gamesResponse = await platformAuthorizedRequest<{
       data: { id: string; name: string; box_art_url: string }[];
     }>('twitch', `${this.apiBase}/helix/games?name=${encodeURIComponent(name)}`);
@@ -357,25 +456,9 @@ export class TwitchService
     return `https://twitch.tv/${this.username}`;
   }
 
-  async getAllTags(): Promise<void> {
-    // Fetch stream tags once per session as they're unlikely to change that often
-    if (this.state.availableTags.length) return;
-    this.SET_AVAILABLE_TAGS(await getAllTags());
-  }
-
-  getStreamTags(): Promise<TTwitchTag[]> {
-    assertIsDefined(this.twitchId);
-    return getStreamTags(this.twitchId);
-  }
-
-  async setStreamTags(tags: TTwitchTag[]) {
-    const hasPermission = await this.hasScope('user:edit:broadcast');
-
-    if (!hasPermission) {
-      return false;
-    }
-    assertIsDefined(this.twitchId);
-    return updateTags()(tags)(this.twitchId);
+  async validateTagsScope() {
+    const hasTagsScope = await this.hasScope('channel:manage:broadcast');
+    this.SET_HAS_TAGS_PERMISSION(hasTagsScope);
   }
 
   async validatePollsScope() {
@@ -384,17 +467,10 @@ export class TwitchService
   }
 
   hasScope(scope: TTwitchOAuthScope): Promise<boolean> {
-    // eslint-disable-next-line prettier/prettier
+    // prettier-ignore
     return platformAuthorizedRequest('twitch', 'https://id.twitch.tv/oauth2/validate').then(
       (response: ITwitchOAuthValidateResponse) => response.scopes.includes(scope),
     );
-  }
-
-  async getHasUpdateTagsPermission() {
-    // if available tags are loaded then the user has permissions
-    if (this.state.availableTags.length) return true;
-    // otherwise make a request to Twitch
-    return await this.hasScope('user:edit:broadcast');
   }
 
   getHeaders(req: IPlatformRequest, authorized = false): ITwitchRequestHeaders {
@@ -411,5 +487,15 @@ export class TwitchService
 
   get liveDockEnabled(): boolean {
     return true;
+  }
+
+  @mutation()
+  private SET_HAS_POLLS_PERMISSION(hasPollsPermission: boolean) {
+    this.state.hasPollsPermission = hasPollsPermission;
+  }
+
+  @mutation()
+  private SET_HAS_TAGS_PERMISSION(hasUpdateTagsPermission: boolean) {
+    this.state.hasUpdateTagsPermission = hasUpdateTagsPermission;
   }
 }

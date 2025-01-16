@@ -1,4 +1,3 @@
-import electron from 'electron';
 import VueI18n from 'vue-i18n';
 import { PersistentStatefulService } from '../core/persistent-stateful-service';
 import { mutation } from 'services/core/stateful-service';
@@ -11,6 +10,7 @@ import * as fs from 'fs';
 import path from 'path';
 import Utils from '../utils';
 import fallback from '../../i18n/fallback';
+import * as remote from '@electron/remote';
 
 interface II18nState {
   locale: string;
@@ -26,15 +26,29 @@ export function $t(...args: any[]): string {
   return vueI18nInstance.t.call(I18nService.vueI18nInstance, ...args);
 }
 
+function $te(...args: any[]): boolean {
+  const vueI18nInstance = I18nService.vueI18nInstance;
+  return vueI18nInstance.te.call(I18nService.vueI18nInstance, ...args);
+}
+
 /**
  * get localized string from dictionary if exists
  * returns a keypath if localized version of string doesn't exist
  */
-export function $translateIfExist(str: string): string {
-  // TODO: Call into worker window instead
-  // const vueI18nInstance = I18nService.vueI18nInstance;
-  // if (vueI18nInstance.te(str)) return $t(str);
-  return str;
+export function $translateIfExist(...args: any[]): string {
+  // TODO: Investigate method to silently fail and not trigger console warnings ($te is unreliable)
+  return $t(...args);
+}
+
+/*
+ * While above it says `$te` is unreliable, running into bugs when OBS settings are used as translation
+ * keys, where `silentTranslationWarn` is set to false in VueI18n, will cause the process to hang when
+ * running tests, and only when running tests, presumably while trying to log the failure to the console.
+ * Not sure which issues we ran into with `$te`, but hoping a small subset (OBS dropdown setting values,
+ * i.e `OBS_PROPERTY_LIST`) will be more reliable.
+ */
+export function $translateIfExistWithCheck(key: string, ...args: any[]) {
+  return $te(key) ? $t(key, ...args) : key;
 }
 
 /**
@@ -96,13 +110,32 @@ export class I18nService extends PersistentStatefulService<II18nState> implement
 
     // use a static method here because it allows to accept unserializable arguments like browserview from other windows
     const i18nService = I18nService.instance as I18nService; // TODO: replace with getResource('I18nService')
-    const locale = i18nService.state.locale;
+    const locale = i18nService.state.locale.toLowerCase();
     view.webContents.on('dom-ready', () => {
       view.webContents.executeJavaScript(`
-        var langCode = $.cookie('langCode');
-        if (langCode !== '${locale}') {
-           $.cookie('langCode', '${locale}');
-           window.location.reload();
+        const getCookie = (name) => {
+          let value = "; " + document.cookie;
+          let parts = value.split("; " + name + "=");
+          if (parts.length === 2) return parts.pop().split(";").shift();
+        };
+
+        const setCookie = (name, value) => {
+          document.cookie = name + "=" + (value || "") + "; path=/";
+        };
+
+        const langCode = getCookie('langCode');
+
+        if (!(new RegExp('${locale}', 'i').test(langCode))) {
+          // Detect the proper format and set the cookie to Desktop's locale
+          const isUpper = x => x.toUpperCase() === x;
+          const splitLocale = l => l.split('-');
+          const [lang, code] = splitLocale(langCode || '');
+          const usesUpperCode = code && isUpper(code[0]);
+          const [newLang, newCode] = splitLocale('${locale}');
+          const localeToSet = [newLang, (usesUpperCode ? newCode.toUpperCase() : newCode)].join('-');
+
+          setCookie('langCode', localeToSet);
+          window.location.reload();
         }
       `);
     });
@@ -151,7 +184,7 @@ export class I18nService extends PersistentStatefulService<II18nState> implement
     // if locale is not set than use electron's one
     let locale = this.state.locale;
     if (!locale) {
-      const electronLocale = electron.remote.app.getLocale();
+      const electronLocale = remote.app.getLocale();
       const langDescription = LANG_CODE_MAP[electronLocale];
       locale = langDescription ? langDescription.locale : 'en-US';
     }
@@ -197,12 +230,13 @@ export class I18nService extends PersistentStatefulService<II18nState> implement
 
   setLocale(locale: string) {
     this.SET_LOCALE(locale);
-    electron.remote.app.relaunch({ args: [] });
-    electron.remote.app.quit();
+    remote.session.defaultSession.flushStorageData();
+    remote.app.relaunch({ args: [] });
+    remote.app.quit();
   }
 
   private getI18nPath() {
-    return path.join(electron.remote.app.getAppPath(), 'app/i18n');
+    return path.join(remote.app.getAppPath(), 'app/i18n');
   }
 
   private loadDictionary(locale: string): Dictionary<string> {

@@ -5,21 +5,21 @@ import {
   prepareToGoLive,
   stopStream,
   submit,
-  tryToGoLive, waitForSettingsWindowLoaded,
+  tryToGoLive,
+  waitForSettingsWindowLoaded,
   waitForStreamStart,
   waitForStreamStop,
 } from '../../helpers/modules/streaming';
 import { showSettingsWindow } from '../../helpers/modules/settings/settings';
-import {clickButton, focusChild, isDisplayed, waitForDisplayed} from '../../helpers/modules/core';
-import { restartApp, test, useSpectron } from '../../helpers/spectron';
-import { reserveUserFromPool } from '../../helpers/spectron/user';
-import { setInputValue } from '../../helpers/modules/forms/base';
+import { clickButton, focusChild, isDisplayed, waitForDisplayed } from '../../helpers/modules/core';
+import { restartApp, test, useWebdriver } from '../../helpers/webdriver';
+import { reserveUserFromPool } from '../../helpers/webdriver/user';
 import { getApiClient } from '../../helpers/api-client';
 import { StreamSettingsService } from '../../../app/services/settings/streaming';
 import { assertFormContains, fillForm } from '../../helpers/modules/forms';
 import { logIn } from '../../helpers/modules/user';
 
-useSpectron();
+useWebdriver();
 
 test('Streaming to Twitch', async t => {
   await logIn('twitch', { multistream: false });
@@ -39,10 +39,10 @@ test('Streaming to Twitch', async t => {
 test('Streaming to Twitch without auth', async t => {
   const userInfo = await reserveUserFromPool(t, 'twitch');
 
+  // type a new stream key in the Stream Settings Window
   await showSettingsWindow('Stream');
-
-  // This is the twitch.tv/slobstest stream key
-  await setInputValue('input[type="password"]', userInfo.streamKey);
+  const key = userInfo.streamKey;
+  await fillForm({ key });
   await clickButton('Done');
 
   // go live
@@ -95,7 +95,8 @@ test('Migrate the twitch account to the protected mode', async t => {
   t.true(await isDisplayed('button=Use recommended settings'), 'Protected mode should be disabled');
 });
 
-test('Twitch Tags', async t => {
+// TODO: Re-enable after reauthing userpool
+test.skip('Twitch Tags', async t => {
   await logIn('twitch');
   await focusChild();
 
@@ -120,5 +121,14 @@ test('Twitch Tags', async t => {
     twitchTags: ['100%', 'AMA'],
   });
 
+  t.pass();
+});
+
+test('Streaming to Twitch unlisted category', async t => {
+  await logIn('twitch');
+  await goLive({
+    title: 'SLOBS Test unlisted Stream',
+    twitchGame: 'Unlisted',
+  });
   t.pass();
 });

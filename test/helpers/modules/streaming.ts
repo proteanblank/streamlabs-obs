@@ -7,7 +7,8 @@ import { getApiClient } from '../api-client';
 import {
   click,
   clickButton,
-  focusChild, getFocusedWindowId,
+  focusChild,
+  getFocusedWindowId,
   isDisplayed,
   select,
   selectButton,
@@ -65,8 +66,12 @@ export async function tryToGoLive(prefillData?: Record<string, unknown>) {
     await waitForSettingsWindowLoaded();
     if (prefillData) {
       await fillForm(prefillData);
-      await sleep(500);
     }
+    // Small sleep in case there's network resources that need to be loaded (i.e Twitch category)
+    // FIXME: this technically makes all streaming tests slower, but helps with flakiness,
+    // we should make it more robust and only do this when needed (i.e Twitch logged in and category not present)
+    // and use an element assertion instead of a sleep
+    await sleep(1000);
     await submit();
   });
 }
@@ -127,10 +132,7 @@ export async function stopRecording() {
 }
 
 export async function waitForSettingsWindowLoaded() {
-  // the spinner can take some time to appear
-  await sleep(500);
-  // wait for at least one input to be displayed
-  return waitForDisplayed('[data-role="input"][data-type="text"]', { timeout: 15000 });
+  return waitForEnabled('button[data-testid=confirmGoLiveBtn]');
 }
 
 export async function switchAdvancedMode() {

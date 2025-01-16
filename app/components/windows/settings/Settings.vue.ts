@@ -1,4 +1,3 @@
-import electron from 'electron';
 import Vue from 'vue';
 import { Component, Watch } from 'vue-property-decorator';
 import { Inject } from 'services/core/injector';
@@ -9,23 +8,28 @@ import GenericFormGroups from 'components/obs/inputs/GenericFormGroups.vue';
 import { WindowsService } from 'services/windows';
 import { ISettingsSubCategory, SettingsService } from 'services/settings/index';
 import DeveloperSettings from './DeveloperSettings';
-import InstalledApps from 'components/InstalledApps.vue';
-import Hotkeys from './Hotkeys.vue';
 import OverlaySettings from './OverlaySettings';
 import NotificationsSettings from './NotificationsSettings.vue';
-import ExperimentalSettings from './ExperimentalSettings.vue';
-import RemoteControlSettings from './RemoteControlSettings.vue';
-import GameOverlaySettings from './GameOverlaySettings';
 import SearchablePages from 'components/shared/SearchablePages';
 import FormInput from 'components/shared/inputs/FormInput.vue';
-import StreamSettings from './StreamSettings';
 import VirtualWebcamSettings from './VirtualWebcamSettings';
 import { MagicLinkService } from 'services/magic-link';
 import { UserService } from 'services/user';
+import { DismissablesService, EDismissable } from 'services/dismissables';
+import { DualOutputService } from 'services/dual-output';
 import Scrollable from 'components/shared/Scrollable';
-import { ObsSettings, PlatformLogo } from 'components/shared/ReactComponentList';
+import {
+  ObsSettings,
+  PlatformLogo,
+  NewBadge,
+  UltraIcon,
+  InstalledApps,
+  Hotkeys,
+} from 'components/shared/ReactComponentList';
 import { $t } from 'services/i18n';
 import { debounce } from 'lodash-decorators';
+import * as remote from '@electron/remote';
+import Utils from '../../../services/utils';
 
 @Component({
   components: {
@@ -38,16 +42,14 @@ import { debounce } from 'lodash-decorators';
     DeveloperSettings,
     OverlaySettings,
     NotificationsSettings,
-    RemoteControlSettings,
-    ExperimentalSettings,
     InstalledApps,
-    GameOverlaySettings,
     FormInput,
-    StreamSettings,
     VirtualWebcamSettings,
     Scrollable,
     PlatformLogo,
     ObsSettings,
+    NewBadge,
+    UltraIcon,
   },
 })
 export default class Settings extends Vue {
@@ -55,6 +57,8 @@ export default class Settings extends Vue {
   @Inject() windowsService: WindowsService;
   @Inject() magicLinkService: MagicLinkService;
   @Inject() userService: UserService;
+  @Inject() dismissablesService: DismissablesService;
+  @Inject() dualOutputService: DualOutputService;
 
   $refs: { settingsContainer: HTMLElement & SearchablePages };
 
@@ -62,6 +66,7 @@ export default class Settings extends Vue {
   searchResultPages: string[] = [];
   icons: Dictionary<string> = {
     General: 'icon-overview',
+    Multistreaming: 'icon-multistream',
     Stream: 'fas fa-globe',
     Output: 'fas fa-microchip',
     Video: 'fas fa-film',
@@ -78,6 +83,11 @@ export default class Settings extends Vue {
     'Remote Control': 'fas fa-play-circle',
     Experimental: 'fas fa-flask',
     'Installed Apps': 'icon-store',
+    'Get Support': 'icon-question',
+  };
+  // for additional dismissables, add below using the category/title as the key
+  dismissables: { [key: string]: EDismissable } = {
+    ['Appearance']: EDismissable.CustomMenuSettings,
   };
 
   internalCategoryName: string = null;
@@ -107,11 +117,7 @@ export default class Settings extends Vue {
   }
 
   set categoryName(val: string) {
-    if (val === 'Prime') {
-      this.magicLinkService.actions.linkToPrime('slobs-settings');
-    } else {
-      this.internalCategoryName = val;
-    }
+    this.internalCategoryName = val;
   }
 
   get isPrime() {
@@ -126,21 +132,26 @@ export default class Settings extends Vue {
    * returns the list of the pages ported to React
    */
   get reactPages() {
-    return [
+    const pages = [
       'General',
-      // 'Stream',
+      'Multistreaming',
+      'Stream',
       // 'Output',
-      // 'Audio',
-      // 'Video',
+      'Audio',
+      'Video',
       // 'Hotkeys',
       'Advanced',
       // 'SceneCollections',
       // 'Notifications',
       'Appearance',
-      // 'RemoteControl',
+      'Remote Control',
       // 'VirtualWebcam',
-      // 'GameOverlay'
+      'Game Overlay',
+      'Get Support',
+      'Ultra',
     ];
+    if (Utils.isDevMode()) pages.push('Experimental');
+    return pages;
   }
 
   get shouldShowReactPage() {
@@ -150,7 +161,6 @@ export default class Settings extends Vue {
   get shouldShowVuePage() {
     if (this.reactPages.includes(this.categoryName)) return false;
     return ![
-      'Hotkeys',
       'Stream',
       'API',
       'Overlays',
@@ -165,14 +175,24 @@ export default class Settings extends Vue {
   }
 
   getInitialCategoryName() {
-    if (this.windowsService.state.child.queryParams) {
-      return this.windowsService.state.child.queryParams.categoryName || 'General';
-    }
-    return 'General';
+    /* Some sort of race condition, perhaps `WindowsService` creating
+     * the window, and *only* after updating its options, results in
+     * accessing state here to be empty for `state.child.queryParams`
+     * which is what this method used to use, unless the child window
+     * has already been displayed once?
+     *
+     * Switching to this method call seems to solve the issue, plus we
+     * shouldn't be accessing state directly regardless.
+     */
+    return this.windowsService.getChildWindowQueryParams()?.categoryName ?? 'General';
   }
 
   get categoryNames() {
-    return this.settingsService.getCategories();
+    // dual output mode returns additional categories for each context
+    // so hide these from the settings list
+    return this.settingsService
+      .getCategories()
+      .filter(category => !category.toLowerCase().startsWith('stream') || category === 'Stream');
   }
 
   save(settingsData: ISettingsSubCategory[]) {
@@ -210,7 +230,11 @@ export default class Settings extends Vue {
   }
 
   onSearchCompletedHandler(foundPages: string[]) {
-    this.searchResultPages = foundPages;
+    if (!this.userService.views.isPrime && this.includeUltra(this.searchStr)) {
+      this.searchResultPages = [...foundPages, 'ultra'];
+    } else {
+      this.searchResultPages = foundPages;
+    }
     // if there are not search results for the current page than switch to the first found page
     if (foundPages.length && !foundPages.includes(this.categoryName)) {
       this.categoryName = foundPages[0];
@@ -225,6 +249,17 @@ export default class Settings extends Vue {
     }
   }
 
+  includeUltra(str: string) {
+    if (str.length < 6 && str.toLowerCase().startsWith('u')) {
+      for (let i = 0; i < 'ultra'.length + 1; i++) {
+        if ('ultra'.slice(0, i) === str) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   @debounce(300)
   debouncedSearchInput(str: string) {
     this.searchStr = str;
@@ -236,20 +271,29 @@ export default class Settings extends Vue {
 
   handleAuth() {
     if (this.userService.isLoggedIn) {
-      electron.remote.dialog
+      remote.dialog
         .showMessageBox({
           title: $t('Confirm'),
-          message: $t('Are you sure you want to log out?'),
+          message: $t('Are you sure you want to log out %{username}?', {
+            username: this.userService.username,
+          }),
           buttons: [$t('Yes'), $t('No')],
         })
         .then(({ response }) => {
           if (response === 0) {
+            this.dualOutputService.setDualOutputMode(false, true);
             this.userService.logOut();
           }
         });
     } else {
       this.windowsService.closeChildWindow();
       this.userService.showLogin();
+    }
+  }
+
+  dismiss(category: string) {
+    if (this.dismissables[category]) {
+      this.dismissablesService.dismiss(this.dismissables[category]);
     }
   }
 }

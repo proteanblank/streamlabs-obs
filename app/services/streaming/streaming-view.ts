@@ -1,14 +1,22 @@
 import { ViewHandler } from '../core';
-import { IGoLiveSettings, IStreamSettings } from './streaming-api';
-import { StreamSettingsService } from '../settings/streaming';
+import {
+  IGoLiveSettings,
+  IStreamSettings,
+  EStreamingState,
+  ERecordingState,
+  EReplayBufferState,
+} from './streaming-api';
+import { StreamSettingsService, ICustomStreamDestination } from '../settings/streaming';
 import { UserService } from '../user';
-import { RestreamService } from '../restream';
-import { getPlatformService, TPlatform, TPlatformCapability } from '../platforms';
+import { RestreamService, TOutputOrientation } from '../restream';
+import { DualOutputService, TDisplayPlatforms, TDisplayDestinations } from '../dual-output';
+import { getPlatformService, TPlatform, TPlatformCapability, platformList } from '../platforms';
 import { TwitterService } from '../../app-services';
 import cloneDeep from 'lodash/cloneDeep';
 import difference from 'lodash/difference';
 import { Services } from '../../components-react/service-provider';
 import { getDefined } from '../../util/properties-type-guards';
+import { TDisplayType } from 'services/settings-v2';
 
 /**
  * The stream info view is responsible for keeping
@@ -35,6 +43,10 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
 
   private get twitterView() {
     return this.getServiceViews(TwitterService);
+  }
+
+  private get dualOutputView() {
+    return this.getServiceViews(DualOutputService);
   }
 
   private get streamingState() {
@@ -70,7 +82,12 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
   }
 
   get game() {
-    return this.commonFields.game;
+    return (
+      (this.platforms.twitch?.enabled && this.platforms.twitch.game) ||
+      (this.platforms.facebook?.enabled && this.platforms.facebook.game) ||
+      (this.platforms.trovo?.enabled && this.platforms.trovo.game) ||
+      ''
+    );
   }
 
   getPlatformDisplayName(platform: TPlatform): string {
@@ -86,19 +103,16 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
    * Returns a sorted list of all platforms (linked and unlinked)
    */
   get allPlatforms(): TPlatform[] {
-    const allPlatforms: TPlatform[] = ['twitch', 'facebook', 'youtube', 'tiktok'];
-    return this.sortPlatforms(allPlatforms);
+    return this.getSortedPlatforms(platformList);
   }
 
   /**
-   * Returns a list of linked platforms available for restream
+   * Returns a list of linked platforms available
    */
   get linkedPlatforms(): TPlatform[] {
     if (!this.userView.state.auth) return [];
-    if (!this.restreamView.canEnableRestream || !this.protectedModeEnabled) {
-      return [this.userView.auth!.primaryPlatform];
-    }
-    return this.allPlatforms.filter(p => this.checkPlatformLinked(p));
+
+    return this.allPlatforms.filter(p => this.isPlatformLinked(p));
   }
 
   get protectedModeEnabled() {
@@ -110,6 +124,17 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
    */
   get enabledPlatforms(): TPlatform[] {
     return this.getEnabledPlatforms(this.settings.platforms);
+  }
+
+  /**
+   * Returns the host from the rtmp url
+   */
+  get enabledCustomDestinationHosts() {
+    return (
+      this.settings.customDestinations
+        .filter(dest => dest.enabled)
+        .map(dest => dest.url.split[2]) || []
+    );
   }
 
   /**
@@ -133,12 +158,118 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
     ) as TPlatform[];
   }
 
+  /**
+   * Returns if the user can or should use the restream service
+   */
   get isMultiplatformMode(): boolean {
+    if (this.isDualOutputMode) return false;
     return (
       this.protectedModeEnabled &&
       (this.enabledPlatforms.length > 1 ||
         this.settings.customDestinations.filter(dest => dest.enabled).length > 0)
     );
+  }
+
+  /**
+   * Returns if dual output mode is on. Dual output mode is only available to logged in users
+   */
+  get isDualOutputMode(): boolean {
+    return this.dualOutputView.dualOutputMode && this.userView.isLoggedIn;
+  }
+
+  getShouldMultistreamDisplay(
+    settings?: IGoLiveSettings,
+  ): { horizontal: boolean; vertical: boolean } {
+    const platforms = settings?.platforms || this.settings.platforms;
+    const customDestinations = settings?.customDestinations || this.customDestinations;
+
+    const platformDisplays = { horizontal: [] as TPlatform[], vertical: [] as TPlatform[] };
+
+    for (const platform in platforms) {
+      if (platforms[platform as TPlatform]?.enabled) {
+        const display = platforms[platform as TPlatform]?.display ?? 'horizontal';
+        platformDisplays[display].push(platform as TPlatform);
+      }
+    }
+
+    // determine which enabled custom destinations use which displays
+    const destinationDisplays = customDestinations.reduce(
+      (displays: TDisplayDestinations, destination: ICustomStreamDestination) => {
+        if (destination.enabled && destination?.display) {
+          displays[destination.display].push(destination.name);
+        }
+        return displays;
+      },
+      { horizontal: [], vertical: [] },
+    );
+
+    return {
+      horizontal: platformDisplays.horizontal.length + destinationDisplays.horizontal.length > 1,
+      vertical: platformDisplays.vertical.length + destinationDisplays.vertical.length > 1,
+    };
+  }
+
+  /**
+   * Returns the enabled platforms according to their assigned display
+   */
+  get activeDisplayPlatforms(): TDisplayPlatforms {
+    return this.enabledPlatforms.reduce(
+      (displayPlatforms: TDisplayPlatforms, platform: TPlatform) => {
+        const display = this.settings.platforms[platform]?.display ?? 'horizontal';
+        displayPlatforms[display].push(platform);
+        return displayPlatforms;
+      },
+      { horizontal: [], vertical: [] },
+    );
+  }
+
+  /**
+   * Returns the enabled destinations according to their assigned display
+   */
+  get activeDisplayDestinations(): TDisplayDestinations {
+    const destinations = this.customDestinations;
+
+    return destinations.reduce(
+      (displayDestinations: TDisplayDestinations, destination: ICustomStreamDestination) => {
+        if (destination.enabled) {
+          displayDestinations[destination.display ?? 'horizontal'].push(destination.url);
+        }
+        return displayDestinations;
+      },
+      { horizontal: [], vertical: [] },
+    );
+  }
+
+  getCanStreamDualOutput(settings?: IGoLiveSettings): boolean {
+    const platforms = settings?.platforms || this.settings.platforms;
+    const customDestinations = settings?.customDestinations || this.customDestinations;
+
+    const platformDisplays = { horizontal: [] as TPlatform[], vertical: [] as TPlatform[] };
+
+    for (const platform in platforms) {
+      if (platforms[platform as TPlatform]?.enabled) {
+        const display = platforms[platform as TPlatform]?.display ?? 'horizontal';
+        platformDisplays[display].push(platform as TPlatform);
+      }
+    }
+
+    // determine which enabled custom destinations use which displays
+    const destinationDisplays = customDestinations.reduce(
+      (displays: TDisplayDestinations, destination: ICustomStreamDestination) => {
+        if (destination.enabled && destination?.display) {
+          displays[destination.display].push(destination.name);
+        }
+        return displays;
+      },
+      { horizontal: [], vertical: [] },
+    );
+    // determine if both displays are selected for active platforms
+    const horizontalHasDestinations =
+      platformDisplays.horizontal.length > 0 || destinationDisplays.horizontal.length > 0;
+    const verticalHasDestinations =
+      platformDisplays.vertical.length > 0 || destinationDisplays.vertical.length > 0;
+
+    return horizontalHasDestinations && verticalHasDestinations;
   }
 
   get isMidStreamMode(): boolean {
@@ -157,10 +288,22 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
 
   /**
    * Chat url of a primary platform
+   * If the primary platform is not enabled, and we're on single stream mode,
+   * returns the URL of the first enabled platform
    */
   get chatUrl(): string {
-    if (!this.userView.auth) return '';
-    return getPlatformService(this.userView.auth.primaryPlatform).chatUrl;
+    if (!this.userView.isLoggedIn || !this.userView.auth) return '';
+
+    const enabledPlatforms = this.enabledPlatforms;
+    const platform = this.enabledPlatforms.includes(this.userView.auth.primaryPlatform)
+      ? this.userView.auth.primaryPlatform
+      : enabledPlatforms[0];
+
+    if (platform) {
+      return getPlatformService(platform).chatUrl;
+    }
+
+    return '';
   }
 
   getTweetText(streamTitle: string) {
@@ -182,6 +325,20 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
 
     const savedGoLiveSettings = this.streamSettingsView.state.goLiveSettings;
 
+    /*
+     * TODO: this should be done as a migration, if needed, but having it
+     * here seems to ensure we always have a primary platform, no app restart needed.
+     * we would ideally run this only if restream can be enabled, but multistream tests fail if we get that specific
+     */
+    const areNoPlatformsEnabled = () => Object.values(platforms!).every(p => !p.enabled);
+
+    if (areNoPlatformsEnabled()) {
+      const primaryPlatform = this.userView.auth?.primaryPlatform;
+      if (primaryPlatform && platforms[primaryPlatform]) {
+        platforms[primaryPlatform]!.enabled = true;
+      }
+    }
+
     return {
       platforms,
       advancedMode: !!this.streamSettingsView.state.goLiveSettings?.advancedMode,
@@ -191,7 +348,7 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
   }
 
   get isAdvancedMode(): boolean {
-    return this.isMultiplatformMode && this.settings.advancedMode;
+    return (this.isMultiplatformMode || this.isDualOutputMode) && this.settings.advancedMode;
   }
 
   /**
@@ -201,7 +358,6 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
     const commonFields = {
       title: '',
       description: '',
-      game: '',
     };
     const destinations = Object.keys(platforms) as TPlatform[];
     const enabledDestinations = destinations.filter(dest => platforms[dest]?.enabled);
@@ -247,23 +403,30 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
   /**
    * return common fields for the stream such title, description, game
    */
-  get commonFields(): { title: string; description: string; game: string } {
+  get commonFields(): { title: string; description: string } {
     return this.getCommonFields(this.settings.platforms);
   }
 
   /**
    * Sort the platform list
-   * - the primary platform is always first
    * - linked platforms are always on the top of the list
    * - the rest has an alphabetic sort
+   *
+   * We no longer put primary platform on top since we're allowing it to be switched
    */
-  sortPlatforms(platforms: TPlatform[]): TPlatform[] {
+  getSortedPlatforms(platforms: TPlatform[]): TPlatform[] {
     platforms = platforms.sort();
     return [
-      ...platforms.filter(p => this.checkPrimaryPlatform(p)),
-      ...platforms.filter(p => !this.checkPrimaryPlatform(p) && this.checkPlatformLinked(p)),
-      ...platforms.filter(p => !this.checkPlatformLinked(p)),
+      ...platforms.filter(p => this.isPlatformLinked(p)),
+      ...platforms.filter(p => !this.isPlatformLinked(p)),
     ];
+  }
+
+  /**
+   * Get the mode name based on the platform or destination display
+   */
+  getDisplayContextName(display: TDisplayType): TOutputOrientation {
+    return this.dualOutputView.getDisplayContextName(display);
   }
 
   /**
@@ -284,12 +447,12 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
     return false;
   }
 
-  checkPlatformLinked(platform: TPlatform): boolean {
+  isPlatformLinked(platform: TPlatform): boolean {
     if (!this.userView.auth?.platforms) return false;
     return !!this.userView.auth?.platforms[platform];
   }
 
-  checkPrimaryPlatform(platform: TPlatform) {
+  isPrimaryPlatform(platform: TPlatform) {
     return platform === this.userView.auth?.primaryPlatform;
   }
 
@@ -330,6 +493,10 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
     return this.settings.platforms[platform];
   }
 
+  setPrimaryPlatform(platform: TPlatform) {
+    this.userView.setPrimaryPlatform(platform);
+  }
+
   /**
    * Returns Go-Live settings for a given platform
    */
@@ -351,10 +518,17 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
       settings['liveVideoId'] = '';
     }
 
+    // make sure platforms assigned to the vertical display in dual output mode still go live in single output mode
+    const display =
+      this.isDualOutputMode && savedDestinations
+        ? savedDestinations[platform]?.display
+        : 'horizontal';
+
     return {
       ...settings,
+      display,
+      enabled,
       useCustomFields,
-      enabled: enabled || this.checkPrimaryPlatform(platform),
     };
   }
 
@@ -364,5 +538,30 @@ export class StreamInfoView<T extends Object> extends ViewHandler<T> {
 
   get delaySeconds() {
     return this.streamSettingsView.settings.delaySec;
+  }
+
+  get isStreaming() {
+    return this.streamingState.streamingStatus !== EStreamingState.Offline;
+  }
+
+  get isRecording() {
+    return this.streamingState.recordingStatus !== ERecordingState.Offline;
+  }
+
+  get isReplayBufferActive() {
+    return this.streamingState.replayBufferStatus !== EReplayBufferState.Offline;
+  }
+
+  get isIdle(): boolean {
+    return !this.isStreaming && !this.isRecording;
+  }
+
+  // TODO: consolidate between this and GoLiveSettings
+  get hasDestinations() {
+    return this.enabledPlatforms.length > 0 || this.customDestinations.length > 0;
+  }
+
+  get selectiveRecording() {
+    return this.streamingState.selectiveRecording;
   }
 }

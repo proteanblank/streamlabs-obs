@@ -2,11 +2,14 @@
  * The core module provides methods for the most frequent actions
  */
 
-import { getContext, TExecutionContext } from '../spectron';
+import { getContext } from '../webdriver/index';
+import { getApiClient } from '../api-client';
+import { WindowsService } from '../../../app/services/windows';
+import type { ClickOptions, WaitForOptions } from 'webdriverio';
 
 export type TSelectorOrEl = string | WebdriverIO.Element;
 
-export function getClient() {
+export function getClient(): WebdriverIO.Browser {
   return getContext().context.app.client;
 }
 
@@ -22,13 +25,20 @@ export async function select(selectorOrEl: TSelectorOrEl): Promise<WebdriverIO.E
   return selectorOrEl;
 }
 
+/**
+ * A shortcut for client.$$()
+ */
+export async function selectElements(selector: string): Promise<WebdriverIO.ElementArray> {
+  return getClient().$$(selector);
+}
+
 export function selectButton(buttonText: string) {
   return select(`button=${buttonText}`);
 }
 
 // CLICK SHORTCUTS
 
-export async function click(selectorOrEl: TSelectorOrEl, options?: WebdriverIO.ClickOptions) {
+export async function click(selectorOrEl: TSelectorOrEl, options?: ClickOptions) {
   const $el = await select(selectorOrEl);
   await $el.waitForClickable();
   await $el.click(options);
@@ -38,6 +48,11 @@ export async function clickIfDisplayed(selectorOrEl: TSelectorOrEl) {
   if (await isDisplayed(selectorOrEl)) {
     await click(selectorOrEl);
   }
+}
+
+export async function clickWhenDisplayed(selectorOrEl: TSelectorOrEl, options?: WaitForOptions) {
+  await waitForDisplayed(selectorOrEl, options);
+  await click(selectorOrEl);
 }
 
 export async function clickText(text: string) {
@@ -53,34 +68,46 @@ export async function clickTab(tabText: string) {
   await click(`div[role="tab"]=${tabText}`);
 }
 
+export async function clickCheckbox(dataName: string) {
+  const $checkbox = await select(`input[data-name="${dataName}"]`);
+  await $checkbox.click();
+}
+
+export async function selectAsyncAlert(title: string) {
+  await (await getClient().$('span.ant-modal-confirm-title')).waitForExist();
+  const alert = await select('span.ant-modal-confirm-title');
+  if ((await alert.getText()) === title) {
+    return alert;
+  }
+}
+
 // OTHER SHORTCUTS
 
-export async function isDisplayed(
-  selectorOrEl: TSelectorOrEl,
-  waitForOptions?: WebdriverIO.WaitForOptions,
-) {
+export async function hoverElement(selector: string, duration?: number) {
+  const element = await select(`${selector}`);
+  await element.moveTo();
+  if (duration) {
+    await getClient().pause(duration);
+  }
+}
+
+export async function isDisplayed(selectorOrEl: TSelectorOrEl, waitForOptions?: WaitForOptions) {
   if (waitForOptions) {
     try {
       await waitForDisplayed(selectorOrEl, waitForOptions);
       return true;
-    } catch (e) {
+    } catch (e: unknown) {
       return false;
     }
   }
   return await (await select(selectorOrEl)).isDisplayed();
 }
 
-export async function waitForDisplayed(
-  selectorOrEl: TSelectorOrEl,
-  options?: WebdriverIO.WaitForOptions,
-) {
+export async function waitForDisplayed(selectorOrEl: TSelectorOrEl, options?: WaitForOptions) {
   await (await select(selectorOrEl)).waitForDisplayed(options);
 }
 
-export async function waitForClickable(
-  selectorOrEl: TSelectorOrEl,
-  options?: WebdriverIO.WaitForOptions,
-) {
+export async function waitForClickable(selectorOrEl: TSelectorOrEl, options?: WaitForOptions) {
   await (await select(selectorOrEl)).waitForClickable(options);
 }
 
@@ -88,11 +115,25 @@ export function waitForText(text: string) {
   return waitForDisplayed(`*="${text}"`);
 }
 
-export async function waitForEnabled(
-  selectorOrEl: TSelectorOrEl,
-  options?: WebdriverIO.WaitForOptions,
-) {
+export async function waitForEnabled(selectorOrEl: TSelectorOrEl, options?: WaitForOptions) {
   await (await select(selectorOrEl)).waitForEnabled(options);
+}
+
+/**
+ * Get number of elements displayed
+ * @remark This is needed because arrays of WebdriverIO.Element cannot use array methods and properties
+ */
+export async function getNumElements(selector: string): Promise<number> {
+  const elements = (await selectElements(selector)).values();
+  let numElements = 0;
+
+  if (elements) {
+    for await (const element of elements) {
+      numElements++;
+    }
+  }
+
+  return numElements;
 }
 
 // WINDOW FOCUS
@@ -104,9 +145,9 @@ export async function getFocusedWindowId(): Promise<string> {
 
 export async function focusWindow(winIdOrRegexp: string | RegExp): Promise<boolean> {
   const client = await getClient();
-  const count = await getClient().getWindowCount();
-  for (let i = 0; i < count; i++) {
-    await client.windowByIndex(i);
+  const handles = await client.getWindowHandles();
+  for (let ind = 0; ind < handles.length; ind++) {
+    await client.switchToWindow(handles[ind]);
     const url = await client.getUrl();
     if (typeof winIdOrRegexp === 'string') {
       const winId = winIdOrRegexp;
@@ -128,9 +169,19 @@ export async function focusMain() {
 }
 
 export async function closeWindow(winId: string) {
-  await useWindow(winId, async () => {
-    await getContext().context.app.browserWindow.close();
-  });
+  const api = await getApiClient();
+  const windowsService = api.getResource<WindowsService>('WindowsService');
+  switch (winId) {
+    case 'main':
+      await windowsService.closeMainWindow();
+      break;
+    case 'child':
+      await windowsService.closeChildWindow();
+      break;
+    default:
+      await windowsService.closeOneOffWindow(winId);
+      break;
+  }
 }
 
 /**

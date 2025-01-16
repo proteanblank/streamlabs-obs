@@ -9,6 +9,7 @@
   "has gifted a sub (%{tier}) to": "daroval(a) předplatné (%{tier}) uživateli",
   "has resubscribed (%{tier}) for %{months} months": "prodloužil(a) své předplatné (%{tier}) již %{months}. měsíc",
   "has subscribed (%{tier})": "se přihlásil(a) k odběru (%{tier})",
+  "has converted from a Prime Gaming sub to a %{tier} sub": "přestoupil(a) z předplatného služby Prime Gaming na předplatné %{tier}",
   "has subscribed": "se přihlásil(a) k odběru",
   "has used": "použil(a)",
   "has hosted you with %{viewers} viewers": "vás hostuje s %{viewers} diváky",
@@ -18,6 +19,7 @@
   "Tier 2": "Úroveň 2",
   "Tier 3": "Úroveň 3",
   "Prime": "Prime",
+  "Ultra": "Ultra",
   "has become a member": "se stal(a) členem",
   "has been a member for %{months} months": "je členem po dobu %{months} měsíců",
   "has liked": "označil(a) obsah jako „To se mi líbí“",
@@ -73,6 +75,10 @@
   "Safe Mode is Enabled": "Nouzový režim je aktivován",
   "Disable Safe Mode": "Deaktivovat nouzový režim",
   "Something went wrong disabling Safe Mode": "Při deaktivaci nouzového režimu došlo k chybě",
-  "Automatically disable Safe Mode": "Automatically disable Safe Mode",
-  "Disable after <duration></duration> minutes": "Disable after <duration></duration> minutes"
+  "Automatically disable Safe Mode": "Automaticky deaktivovat nouzový režim",
+  "Disable after <duration></duration> minutes": "Deaktivovat po <duration></duration> minutách",
+  "has resubscribed": "prodloužil(a) své předplatné",
+  "has gifted a sub to": "daroval(a) předplatné uživateli",
+  "has resubscribed for %{streak} months in a row! (%{months} total)": "prodloužil(a) své předplatné bez přerušení již %{streak}. měsíc! (celkem měsíců: %{months})",
+  "has resubscribed for %{months} months": "prodloužil(a) své předplatné již %{months}. měsíc"
 }
